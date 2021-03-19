@@ -6,7 +6,7 @@ change the pattern to one of the included patterns and rebuild,
 
 zig build-exe -O ReleaseFast --pkg-begin zbox ../zbox/src/box.zig --pkg-end life.zig
 
-Until my fixes and enhancement for zbox are accepted you will need to clone: https://github.com/edt-xx/zbox.git
+zbox can be cloned from: https://github.com/jessrud/zbox.git
 
 A title line with:
 

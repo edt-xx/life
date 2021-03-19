@@ -9,6 +9,8 @@ const display = @import("zbox");
 //
 // zig build-exe -O ReleaseFast --pkg-begin zbox ../zbox/src/box.zig --pkg-end life.zig
 //
+// zbox can be cloned from: https://github.com/jessrud/zbox.git
+//
 // generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s  heap(8) 61286/16841  window(2) -11402,-11587
 //
 // The title line tells us this is generation 200198 and the (2) that we are displaying every second generation ( see +, - )
@@ -34,9 +36,6 @@ const display = @import("zbox");
 // This algorythm is nothing special by todays standards, its not super fast, it does not use SIMD or the GPU for speed, nor does it
 // make much use of multiple CPUs.  As a learning exercise its been interesting though.
 //
-// Until jessrud accepts my fixes and enhancement for zbox you will need to clone: https://github.com/edt-xx/zbox.git
-// 
-// To build use something like: zig build-exe -O ReleaseFast --pkg-begin zbox ../zbox/src/box.zig --pkg-end life.zig
 
 // set the pattern to run below
 //const pattern = p_pony_express;
