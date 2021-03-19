@@ -1,6 +1,6 @@
 Author Ed Tomlinson (2021), released under the GPL V3 license.
 
-This program is an implementation of life as create by John H. Conway.  
+This program is an implementation of life as created by John H. Conway.  
 
 change the pattern to one of the included patterns and rebuild, 
 
