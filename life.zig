@@ -13,7 +13,7 @@ const display = @import("zbox");
 //
 // The title line tells us this is generation 200198 and the (2) that we are displaying every second generation ( see +, - )
 // the population is 77132 cells with (11719) cells considered active (a birth or death near the cell in the last generation)
-// birth and deaths as per the rules of life
+// birth and deaths as per the rules of life  
 // generations per second.  If the rate is limited (see s, f) you will see rate> indicating we can run faster.
 // we are using a heap size of 2^8 x 2^8 with 61286 entries and we need to check 16841 cells for the next generation.
 // window(2) tells us autotracking is enabled ( t ) and it is using 2 generations for tracking info.  
@@ -32,7 +32,7 @@ const display = @import("zbox");
 // better idea of how zig compiles and where the program was spending its time.
 //
 // This algorythm is nothing special by todays standards, its not super fast, it does not use SIMD or the GPU for speed, nor does it
-// make much use of osThreads.  As a learning exercise its been interesting though.
+// make much use of multiple CPUs.  As a learning exercise its been interesting though.
 //
 // Until jessrud accepts my fixes and enhancement for zbox you will need to clone: https://github.com/edt-xx/zbox.git
 // 
@@ -42,7 +42,7 @@ const display = @import("zbox");
 //const pattern = p_pony_express;
 const pattern = p_1_700_000m;
 //const pattern = p_max;
-// const pattern = p_52513m;
+//const pattern = p_52513m;
 
 const print = std.debug.print;
 
@@ -225,18 +225,20 @@ const Hash = struct {
 
         const h = self.index(x,y);  // zig does not have 2D dynamic arrays so we fake it...
         
-        var i = self.hash[h];       // Points to the current Cell or null
+        var i = self.hash[h];       // ***1 Points to the current Cell or null
+        
         while (i) |c| {
             if (x == c.p.x and y == c.p.y) {
-                 c.v += 10;
-                 if (c.v < 13) check.appendAssumeCapacity(c);       // if not added a potential birth, add it now
+                 c.v += 10;                                         // ***2
+                 if (c.v < 13) check.appendAssumeCapacity(c);       // ***3 if not added a potential birth, add it now
                  return;
             }
             i = c.n;          // advance to the next cell
         }
-        cells.appendAssumeCapacity(Cell.init(Point{.x=x, .y=y}, self.hash[h], 10));  // cell not in heap so add it and        
-        self.hash[h] = &cells.items[cells.items.len-1];                              // link it into the head of the list
-        check.appendAssumeCapacity(&cells.items[cells.items.len-1]);                 // add to check list
+        var c = cells.addOneAssumeCapacity();
+        c.* = Cell.init(Point{.x=x, .y=y}, self.hash[h], 10);  // ***4 cell not in heap so add it and        
+        self.hash[h] = c;                                      // ***1 link it into the head of the list
+        check.appendAssumeCapacity(c);                         // ***3 add to check list
         return;
     }
     
@@ -253,14 +255,15 @@ const Hash = struct {
         var i = self.hash[h];       // Points to the current Cell or null
         while (i) |c| {
             if (x == c.p.x and y == c.p.y) {
-                 c.v += 1;
+                 c.v += 1;                                          // ***
                  if (c.v == 3) check.appendAssumeCapacity(c);       // potential birth
                  return;
             }
             i = c.n;          // advance to the next cell
         }
-        cells.appendAssumeCapacity(Cell.init(Point{.x=x, .y=y}, self.hash[h], 1));  // cell not in heap so add it and        
-        self.hash[h] = &cells.items[cells.items.len-1];                             // link it into the head of the list
+        var c = cells.addOneAssumeCapacity();
+        c.* = Cell.init(Point{.x=x, .y=y}, self.hash[h], 1);    // cell not in heap so add it and        
+        self.hash[h] = c;                                       // link it into the head of the list ***
         return;
     }
     
