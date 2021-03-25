@@ -27,7 +27,7 @@ the last two numbers are the window position.
 
 The algorithm used here was developed in the late 70s or early 80s.  I first implemented it on an OSI superboard II using 
 Basic and 6502 assembly.  This was before algorithms like hash life were discovered.  I've been using it when I want to learn a 
-new language environment.  This version was started to learn basic zig, then valgrind came into the picture and let me get a  
+new language environment.  This version was started to learn basic zig, then valgrind came into the picture and let me get a 
 better idea of how zig compiles and where the program was spending its time.  
 
 This algorithm is nothing special by todays standards, it does not use SIMD or the GPU for speed.  It does use threading when
