@@ -7,7 +7,7 @@ const display = @import("zbox");
 //
 // change the pattern to one of the included patterns and rebuild, 
 //
-// zig build-exe -O ReleaseFast --pkg-begin zbox ../zbox/src/box.zig --pkg-end life.zig
+// zig build-exe -lpthread -O ReleaseFast --pkg-begin zbox ../zbox/src/box.zig --pkg-end life.zig
 //
 // zbox can be cloned from: https://github.com/jessrud/zbox.git
 //
@@ -40,10 +40,22 @@ const display = @import("zbox");
 // This algorithm is nothing special by todays standards, it does not use SIMD or the GPU for speed.  It does use threading when
 // updating the display and for the generation update.  Its been a good learning tool.
 //
+// How it works.  We have an N x N array of pointers to cells.  The indexes to the array is a hash based on the x, y cords of the cell.
+// Each cell has a pointer to another cell.  So we have a lists of cells where hash(x,y) are the same.  We size the array depending on how
+// loaded it becomes, at near 100% ( eg. N x N is near 2^(N+N)) we increase N.  We use this structure to sum the effects of cells on each
+// other.  We also track 4 x 4 areas ( eg hash(x/4, y/4)) flagging each area static if no births or deaths occur in the area.  Any cells
+// in a static area survive into the next generation.  We still have to add the effect of these cell on any cell in an ajoining non static
+// area.  The effect of all this is to drasticly limit the number of cells we need to work with.  Another optimization is to record a
+// pointer to any cell that might contain a birth or could survive into the next generation (the check arrayList).  Once we finsh 
+// processing the alive arraylist (processAlive), we start a thread to update the display and, using the check list (ProcessCheck)
+// update the alive lists for the next generation.  To make being thread safe easier we keep alive[threads] lists of alive points.  
+// ProcessCheck in designed to be thread safe, and more importantly, balances the alive lists and updates the static 4x4 area flags
+// when we find a birth or death.  It also gathers data to allow autotracking of activity. The check list typically is only 25-35% 
+// of the size if the cells arrayList.   
 
 // set the pattern to run below
 
-const pattern = p_1_700_000m;
+const pattern = p_95_206_595m;
 
 //const pattern = p_pony_express;
 //const pattern = p_95_206_595m;
@@ -51,17 +63,32 @@ const pattern = p_1_700_000m;
 //const pattern = p_max;
 //const pattern = p_52513m;
 
-const Threads = 2;                  // Threads to use for next generation calculation, display updating is threaded too.
-const checkThreading = 250_000;     // only worthwhile for large populations producing large check arrayList
+const Threads = 4;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
+const checkThreading = 1_000;      // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops, now a net gain.
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
 //
 // Threads  gen         rate    cpu
-// 1        100,000     260/s   15%
-// 2        100,000     290/s   24% 
-// 3        100,000     350/s   32%
-// 4        100,000     370/s   38%
-// 6        100,000     410/s   50%
+// 1        100,000     270s    15%
+// 2        100,000     280/s   25%
+// 3        100,000     330/s   38%
+// 4        100,000     390/s   48q%
+// 5        100,100     420/s   58%
+// 6        100,000     475/s   66%
+// 7        100,000     490/s   74%
+// 8        100,000     440/    68% (suspect we are thermally limited here - my cpu is at 90C...)q
+//
+// operf with 6 threads reports:
+//
+//CPU: Intel Haswell microarchitecture, speed 4000 MHz (estimated)
+//Counted CPU_CLK_UNHALTED events (Clock cycles when not halted) with a unit mask of 0x00 (No unit mask) count 100000
+//samples  %        symbol name
+//19955280 72.1550  processAlive
+//3220171  11.6436  processCheck
+//2187892   7.9111  Hash.i_512
+//1100043   3.9776  Hash.setActive
+//600903    2.1728  worker
+//471846    1.7061  Hash.i_256
 
 const print = std.debug.print;
 
@@ -204,7 +231,7 @@ const Hash = struct {
         return (( x*%x >> 26) | 
                 ( y*%y >> 26 << 6));     // compiler 0.71 generates faster code using left shift vs a bit mask.
     } 
- 
+    
     fn i_128(x:u32, y:u32) u32 { 
         return (( x*%x >> 25) | 
                 ( y*%y >> 25 << 7));     
@@ -212,7 +239,7 @@ const Hash = struct {
     
     fn i_256(x:u32, y:u32) u32 { 
         return (( x*%x >> 24) | 
-                ( y*%y >> 24 << 8)); 
+                 ( y*%y >> 24 << 8)); 
     }
     
     fn i_512(x:u32, y:u32) u32 {  
@@ -394,6 +421,8 @@ var processing=[_]bool{false} ** Threads;
 var work:std.Thread.Mutex = std.Thread.Mutex{};
 var disp_work:std.Thread.Mutex = std.Thread.Mutex{};
 var fini:std.Thread.Mutex = std.Thread.Mutex{};
+var begin:std.Thread.Condition = std.Thread.Condition{};
+var done:std.Thread.Condition = std.Thread.Condition{};
 var working:usize = 1;
 var displaying:usize = 1;
 var checking:bool = false;
@@ -420,7 +449,8 @@ pub fn worker(t:usize) void {
         {                                                      
             const w = trigger.acquire();                       // block waiting for work
             _ = @atomicRmw(usize, counter, .Add, 1, .AcqRel);  // we are now working
-            w.release();                                       
+            w.release();
+            begin.signal();                                    // tell main to check counter
         }                                                      
         if (t==0)                                              // depending on the thread & checking, do the work
             display.push(screen) catch {}                      
@@ -431,7 +461,8 @@ pub fn worker(t:usize) void {
         {                                                      
             const f = fini.acquire();                          // work is now finished
             _ = @atomicRmw(usize, counter, .Sub, 1, .AcqRel);  // no longer working
-            f.release();                                            
+            f.release(); 
+            done.signal();                                     // tell main to check counter
         }
     }
 }
@@ -692,9 +723,11 @@ pub fn main() !void {
         
         if (gen%std.math.shl(u32,1,s)==0) {
             //const tmp:i128 = std.time.nanoTimestamp();
+            f = fini.acquire();
             while (@atomicLoad(usize,&displaying,.Acquire)>1) {    // wait for display worker thread, usually its done before we get here
-                try std.os.sched_yield();
+                done.wait(&fini);
             }
+            f.release();
             //ddd=(std.time.nanoTimestamp()-tmp);
         }
  
@@ -727,18 +760,18 @@ pub fn main() !void {
         checking = false;
         
         f = fini.acquire();                                        // block completions so a quickly finishing thread is seen
-        w.release();                                               // all threads are waiting for the work mutex which we own
         while (@atomicLoad(usize,&working,.Acquire)<Threads) {     // wait for all worker threads to wake each other
-            std.Thread.spinLoopHint();
+            begin.wait(&work);                                     // release work mutex and wait for worker to signal 
         }
-        w = work.acquire();                                         // all work started and we own the mutex
-        f.release();                                                // allow completions
+        f.release();                                               // allow completions
                     
-        processAlive(0);                                              // Use our existing thread. 
+        processAlive(0);                                           // Use our existing thread. 
         
-        while (@atomicLoad(usize,&working,.Acquire)>1) {            // wait for all worker threads to finish
-            try std.os.sched_yield();
+        f = fini.acquire();
+        while (@atomicLoad(usize,&working,.Acquire)>1) {           // wait for all worker threads to finish
+            done.wait(&fini);
         }
+        f.release();
         
         checkMax = 0;
         cellsMax = 0;
@@ -776,11 +809,9 @@ pub fn main() !void {
         
         if ((gen+1)%std.math.shl(u32,1,s)==0 and gen>0) {           // update display every 2^s generations
             f=fini.acquire();
-            dw.release();
             while (@atomicLoad(usize,&displaying,.Acquire)<2) {     // wait for worker thread
-                std.Thread.spinLoopHint();
+                begin.wait(&disp_work);                             // release disp_work mutex and wait for worker to signal
             }
-            dw = disp_work.acquire();
             f.release();
         }
                 
@@ -803,24 +834,24 @@ pub fn main() !void {
         while (t<Threads) : ( t+=1 ) {
             try alive[t].ensureCapacity(alive[t].items.len+checkMax+2);
         }
-        
-        if (checkMax > checkThreading) {                   
+
+        if (checkMax > checkThreading and Threads>1) {                   
             
-            checking = true;                                           // enabling threading here costs cpu only help for very large checkMax  
+            checking = true;                                            // enabling threading here costs cpu only help for very large checkMax  
             
             f = fini.acquire();
-            w.release();                                               // all threads are waiting for the work mutex which we own
-            while (@atomicLoad(usize,&working,.Acquire)<Threads) {     // wait for all worker threads to wake each other
-                std.Thread.spinLoopHint();
+            while (@atomicLoad(usize,&working,.Acquire)<Threads) {      // wait for all worker threads to wake each other
+                begin.wait(&work);                                      // release work mutex and wait for worker to signal
             }
-            w = work.acquire();                                         // all work started and we own the mutex
             f.release();                                                // let threads record completions
             
             processCheck(0);                                            // use this thread too
             
+            f = fini.acquire();
             while (@atomicLoad(usize,&working,.Acquire)>1) {            // wait for all worker threads to finish
-                try std.os.sched_yield();
+                done.wait(&fini);
             }
+            f.release();
         } else {
             t = 0;                                                      // in most cases this is the faster option
             while (t<Threads) : (t+=1) 
