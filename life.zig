@@ -55,11 +55,11 @@ const display = @import("zbox");
 
 // set the pattern to run below
 
-const pattern = p_95_206_595m;
+const pattern = p_1_700_000m;
 
 //const pattern = p_pony_express;
 //const pattern = p_95_206_595m;
-//const pattern = p_1_700_000m;
+//const pattern = p_1_700_000m;    // my current favorite pattern, use cursor keys and watch at -n,-n where n<1200 or so. 
 //const pattern = p_max;
 //const pattern = p_52513m;
 
@@ -72,11 +72,11 @@ const checkThreading = 1_000;      // Condition vars and -lpthread (std.Thread.C
 // 1        100,000     270s    15%
 // 2        100,000     280/s   25%
 // 3        100,000     330/s   38%
-// 4        100,000     390/s   48q%
+// 4        100,000     390/s   48%
 // 5        100,100     420/s   58%
 // 6        100,000     475/s   66%
 // 7        100,000     490/s   74%
-// 8        100,000     440/    68% (suspect we are thermally limited here - my cpu is at 90C...)q
+// 8        100,000     440/    68% (suspect we are thermally limited here - my cpu is at 90C...)
 //
 // operf with 6 threads reports:
 //
@@ -284,7 +284,7 @@ const Hash = struct {
             
             while (i) |c| {
                 if (x == c.p.x and y == c.p.y) {
-                    const v = @atomicRmw(u8,&c.v,.Add,10,.AcqRel);
+                    const v = @atomicRmw(u8,&c.v,.Add,10,.Monotonic);
                     if (v > 2) return;                         
                     check.items[iCheck] = c;                   // potential survivor, add to checklist if not already done for births
                     iCheck += Threads;
@@ -1220,4 +1220,109 @@ const p_max =
 \\10b2obo2bo2bob2o2bob$13bo5b2o5bo$b2o9b2ob3obob2o3bo$2b3obo3bo4bobo5b4o
 \\$2b2o3bobo4bo12b$2b2obobobobo4bo10b$5bobo2bobo3bo10b$4b2obo2b3o2bo11b$
 \\6b2o4b3o12b$7b3o17b$8bo!
+;
+
+const p19_659_494m = 
+\\bboooboobobboooooooobboboobooobb$
+\\bbobboobbbobobbbbbbobobbboobbobb$
+\\ooobbbbboobbobboobbobboobbbbbooo$
+\\obbbbooooobbboboobobbbooooobbbbo$
+\\obbbobbobobboobbbboobbobobbobbbo$
+\\bobobobboobbboboobobbboobbobobob$
+\\oobobbbbbbobboooooobbobbbbbboboo$
+\\obboobbboobooobbbboooboobbboobbo$
+\\bbooboboooobooobbooobooooboboobb$
+\\oboooobooobbboboobobbboooboooobo$
+\\bobbbbobobbbobbbbbbobbbobobbbbob$
+\\bbbbbbbobbbbbobbbbobbbbbobbbbbbb$
+\\ooobobboobobooboobooboboobbobooo$
+\\obboooooooboooooooooobooooooobbo$
+\\obbbbbobobbbbobbbbobbbbobobbbbbo$
+\\obooboobbobboobbbboobbobbooboobo$
+\\obooboobbobboobbbboobbobbooboobo$
+\\obbbbbobobbbbobbbbobbbbobobbbbbo$
+\\obboooooooboooooooooobooooooobbo$
+\\ooobobboobobooboobooboboobbobooo$
+\\bbbbbbbobbbbbobbbbobbbbbobbbbbbb$
+\\bobbbbobobbbobbbbbbobbbobobbbbob$
+\\oboooobooobbboboobobbboooboooobo$
+\\bbooboboooobooobbooobooooboboobb$
+\\obboobbboobooobbbboooboobbboobbo$
+\\oobobbbbbbobboooooobbobbbbbboboo$
+\\bobobobboobbboboobobbboobbobobob$
+\\obbbobbobobboobbbboobbobobbobbbo$
+\\obbbbooooobbboboobobbbooooobbbbo$
+\\ooobbbbboobbobboobbobboobbbbbooo$
+\\bbobboobbbobobbbbbbobobbboobbobb$
+\\bboooboobobboooooooobboboobooobb!
+;
+
+const p5_931_548m =
+\\obbbbooboobbooobbooobbooboobbbbo$
+\\bbbobobobbbobbboobbbobbbobobobbb$
+\\bbbobbbobbboooboobooobbbobbbobbb$
+\\booboobboboobooooooboobobbooboob$
+\\bbboobbboobbbbboobbbbboobbboobbb$
+\\oobobbbbboooboooooobooobbbbboboo$
+\\obbbbbbobboboobooboobobbobbbbbbo$
+\\boobbboobobooboooobooboboobbboob$
+\\obboobbboobbooobbooobboobbboobbo$
+\\obbboobooobbooobbooobboooboobbbo$
+\\bbboboobbbbbobboobbobbbbboobobbb$
+\\booobobobbbobobbbbobobbbobobooob$
+\\obobbboooooboobbbboobooooobbbobo$
+\\obooboobooboooobbooooboobooboobo$
+\\obbobobooobbboboobobbbooobobobbo$
+\\booooooobbobbbobbobbbobbooooooob$
+\\booooooobbobbbobbobbbobbooooooob$
+\\obbobobooobbboboobobbbooobobobbo$
+\\obooboobooboooobbooooboobooboobo$
+\\obobbboooooboobbbboobooooobbbobo$
+\\booobobobbbobobbbbobobbbobobooob$
+\\bbboboobbbbbobboobbobbbbboobobbb$
+\\obbboobooobbooobbooobboooboobbbo$
+\\obboobbboobbooobbooobboobbboobbo$
+\\boobbboobobooboooobooboboobbboob$
+\\obbbbbbobboboobooboobobbobbbbbbo$
+\\oobobbbbboooboooooobooobbbbboboo$
+\\bbboobbboobbbbboobbbbboobbboobbb$
+\\booboobboboobooooooboobobbooboob$
+\\bbbobbbobbboooboobooobbbobbbobbb$
+\\bbbobobobbbobbboobbbobbbobobobbb$
+\\obbbbooboobbooobbooobbooboobbbbo!
+;
+
+const p2_230_963m =
+\\obobbobbboooboobboobooobbbobbobo$
+\\bboobooboboooooooooooobobooboobb$
+\\oobboooboooboooooooobooobooobboo$
+\\bobbobbboboobboooobboobobbbobbob$
+\\bboobboobbbbbboooobbbbbboobboobb$
+\\ooobbboboobbbobbbbobbboobobbbooo$
+\\boobooobooboboooooobobooboooboob$
+\\bbbbobbbbboobbboobbboobbbbbobbbb$
+\\boooboobboooobboobboooobboobooob$
+\\obobboobobbbbobbbbobbbboboobbobo$
+\\oooobbboobooobobboboooboobbboooo$
+\\oobobbooobobbbbbbbbbbobooobboboo$
+\\boobbbbbobobooobbooobobobbbbboob$
+\\ooobboobbobbobbbbbbobbobboobbooo$
+\\ooooobobbboboboooobobobbbobooooo$
+\\boooobooobbbbboooobbbbboooboooob$
+\\boooobooobbbbboooobbbbboooboooob$
+\\ooooobobbboboboooobobobbbobooooo$
+\\ooobboobbobbobbbbbbobbobboobbooo$
+\\boobbbbbobobooobbooobobobbbbboob$
+\\oobobbooobobbbbbbbbbbobooobboboo$
+\\oooobbboobooobobboboooboobbboooo$
+\\obobboobobbbbobbbbobbbboboobbobo$
+\\boooboobboooobboobboooobboobooob$
+\\bbbbobbbbboobbboobbboobbbbbobbbb$
+\\boobooobooboboooooobobooboooboob$
+\\ooobbboboobbbobbbbobbboobobbbooo$
+\\bboobboobbbbbboooobbbbbboobboobb$
+\\bobbobbboboobboooobboobobbbobbob$
+\\oobboooboooboooooooobooobooobboo$
+\\bboobooboboooooooooooobobooboobb$
+\\obobbobbboooboobboobooobbbobbobo!
 ;
