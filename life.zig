@@ -44,14 +44,25 @@ const display = @import("zbox");
 // Each cell has a pointer to another cell.  So we have a lists of cells where hash(x,y) are the same.  We size the array depending on how
 // loaded it becomes, at near 100% ( eg. N x N is near 2^(N+N)) we increase N.  We use this structure to sum the effects of cells on each
 // other.  We also track 4 x 4 areas ( eg hash(x/4, y/4)) flagging each area static if no births or deaths occur in the area.  Any cells
-// in a static area survive into the next generation.  We still have to add the effect of these cell on any cell in an ajoining non static
-// area.  The effect of all this is to drasticly limit the number of cells we need to work with.  Another optimization is to record a
-// pointer to any cell that might contain a birth or could survive into the next generation (the check arrayList).  Once we finsh 
-// processing the alive arraylist (processAlive), we start a thread to update the display and, using the check list (ProcessCheck)
+// in a static area survive into the next generation.  We still have to add the effect of these cell on any cell in an ajoining non 
+// static area.  The effect of all this is to drasticly limit the number of cells we need to work with.  Once we finsh processing 
+// the alive arraylist (processAlive), we start a thread to update the display and, using the cells list (processCells)
 // update the alive lists for the next generation.  To make being thread safe easier we keep alive[threads] lists of alive points.  
 // ProcessCheck in designed to be thread safe, and more importantly, balances the alive lists and updates the static 4x4 area flags
 // when we find a birth or death.  It also gathers data to allow autotracking of activity. The check list typically is only 25-35% 
-// of the size if the cells arrayList.   
+// of the size if the cells arrayList. 
+//
+// The way the cells are added in AddCell and AddNear is interesting.  At the start of the process we record the cells head of list.
+// If the cell does not exist in the list we try to add it.  In the multithreaded case, another thread may have already done this, 
+// and will have updated the head of list,  the @cmpxchgStrong detects this, which case we just retry with the new head of list.  
+// Typically this happen a few times per generation.  The process would also work with @cmpxchgWeak, but I do not see much, if any,
+// differences in benchmarks.  (currently it uses Strong - speed is about the same might be using a little less CPU).
+//
+// Sometimes optimization is not at all obvious.  It is possibe to create a list of cells that might contain a birth or death while
+// processing the alive lists.  This gives us a subset of cells to check usually containing 25-35% of cells.  Normally this would 
+// help since scanning less is good.  However because we spend most of our time in processAlive in addCell and addNear the overhead 
+// to track these cells actually ends up costing us 2-5%.  I added this optimization before the addition of the static cell logic.
+// which reduces the number of cells to process by about 70-90%, that changed the balance so the checkList was no longer helping.
 
 // set the pattern to run below
 
@@ -59,36 +70,37 @@ const pattern = p_1_700_000m;
 
 //const pattern = p_pony_express;
 //const pattern = p_95_206_595m;
-//const pattern = p_1_700_000m;    // my current favorite pattern, use cursor keys and watch at -n,-n where n<1200 or so. 
+//const pattern = p_1_700_000m;    // my current favorite pattern, use cursor keys and watch at -n,-n where n<1400 or so. 
 //const pattern = p_max;
 //const pattern = p_52513m;
 
 const Threads = 4;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
-const checkThreading = 1_000;      // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops, now a net gain.
+const cellsThreading = 1_000;      // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops, now a net gain.
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
 //
 // Threads  gen         rate    cpu
-// 1        100,000     270s    15%
-// 2        100,000     280/s   25%
-// 3        100,000     330/s   38%
-// 4        100,000     390/s   48%
-// 5        100,100     420/s   58%
-// 6        100,000     475/s   66%
-// 7        100,000     490/s   74%
-// 8        100,000     440/    68% (suspect we are thermally limited here - my cpu is at 90C...)
+// 1        100,000     330s    15%
+// 2        100,000     290/s   24%     using rmw in addCell and addNear seems to be the reason for this decrease
+// 3        100,000     370/s   37%
+// 4        100,000     400/s   46%
+// 5        100,100     450/s   58%
+// 6        100,000     500/s   66%
+// 7        100,000     540/s   73%
+// 8        100,000     500/s   68%     The update threads + display thread > CPU threads so we take longer in processCells/displayUqpdate
 //
 // operf with 6 threads reports:
 //
 //CPU: Intel Haswell microarchitecture, speed 4000 MHz (estimated)
 //Counted CPU_CLK_UNHALTED events (Clock cycles when not halted) with a unit mask of 0x00 (No unit mask) count 100000
 //samples  %        symbol name
-//19955280 72.1550  processAlive
-//3220171  11.6436  processCheck
-//2187892   7.9111  Hash.i_512
-//1100043   3.9776  Hash.setActive
-//600903    2.1728  worker
-//471846    1.7061  Hash.i_256
+//15263458 72.1322  processAlive
+//2586765  12.2246  processCells
+//1723498   8.1449  Hash.i_512
+//831303    3.9286  Hash.setActive
+//350329    1.6556  worker
+//323100    1.5269  Hash.i_256
+
 
 const print = std.debug.print;
 
@@ -102,28 +114,15 @@ fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn
 const Point = struct {
     x: u32,
     y: u32,
-    
-    fn init(x:u32, y:u32) Point {           // constuct a point
-        return Point{.x=x, .y=y};
-    }
-    
-    fn tile(p:Point) Point {                // use a 4x4 tile (testing shows this to be the optimal size) 
-        return Point{.x=p.x>>2, .y=p.y>>2};
-    }
 };
 
 const Cell = struct {
     p: Point,                               // point for this cell
     n: ?*Cell,                              // pointer for the next cell in the same hash chain
     v: u8,                                  // value used to caculate next generation
-    
-    fn init(p:Point, n:?*Cell, v:u8) Cell {
-        return Cell{.p=Point{.x=p.x, .y=p.y}, .n=n, .v=v};
-        // return Cell{.p=p, .n=n, .v=v};
-    }
 };
 
-var locked = Cell.init(Point.init(0,0),null,0);
+var theSize:usize = 0;
 
 const Hash = struct {
     hash:[]?*Cell,              // pointers into the cells arraylist (2^order x 2^order hash table)
@@ -138,7 +137,10 @@ const Hash = struct {
 // log2 of the population from the last iteration.  The ammount of memory used is a tradeoff
 // between the length of the hash/heap chains and the time taken to clear the hash array.
         
-        switch (std.math.log2(size)) {                  // allows number of cells to reach the hash size before uping the order
+        if (size < theSize/2 or size > theSize)     // reduce order bouncing and (re)allocates
+            theSize = size;
+        
+        switch (std.math.log2(theSize)) {           // allows number of cells to reach the hash size before uping the order
          0...11 => self = Hash { .hash=undefined, 
                                  .static=undefined,
                                  .index = i_64,
@@ -187,7 +189,7 @@ const Hash = struct {
         self.static = s.static;
     }
     
-    fn takeStatic(self:*Hash,s:*Hash) !void {
+    fn takeStatic(self:*Hash,s:*Hash) !void {          
         if (self.order != s.order) {
             allocator.free(s.static);
             s.static = try allocator.alloc(bool,std.math.shl(usize,1,2*self.order));
@@ -205,19 +207,23 @@ const Hash = struct {
         allocator.free(self.static);
     }
         
-    fn setActive(self:*Hash,p:Point) void {     // Collisions are ignored here, more tiles will be flagged as active which is okay
-         var t = Point.tile(p);
+    fn setActive(self:*Hash,p:Point) void {         // Collisions are ignored here, more tiles will be flagged as active which is okay
+         const t = Point{.x=p.x>>2, .y=p.y>>2};
+         var tx = t.x;
+         var ty = t.y;
          const x = p.x & 0x03;   // 4x4 tiles are optimal                
-         const y = p.y & 0x03;
-                                 self.static[self.index(t.x, t.y)] = false;
-         t.x +%= 1;              if (x==3         ) self.static[self.index(t.x, t.y)] = false;
-                     t.y +%= 1;  if (x==3 and y==3) self.static[self.index(t.x, t.y)] = false;
-         t.x -%= 1;              if (         y==3) self.static[self.index(t.x, t.y)] = false;
-         t.x -%= 1;              if (x==0 and y==3) self.static[self.index(t.x, t.y)] = false;
-                     t.y -%= 1;  if (x==0         ) self.static[self.index(t.x, t.y)] = false;
-                     t.y -%= 1;  if (x==0 and y==0) self.static[self.index(t.x, t.y)] = false;
-         t.x +%= 1;              if (         y==0) self.static[self.index(t.x, t.y)] = false;
-         t.x +%= 1;              if (x==3 and y==0) self.static[self.index(t.x, t.y)] = false;
+         const y = p.y & 0x03;         
+         
+         self.static[self.index(tx, ty)] = false;
+         
+         tx +%= 1;              if (x==3         ) self.static[self.index(tx, ty)] = false;
+                     ty +%= 1;  if (x==3 and y==3) self.static[self.index(tx, ty)] = false;
+         tx -%= 1;              if (         y==3) self.static[self.index(tx, ty)] = false;
+         tx -%= 1;              if (x==0 and y==3) self.static[self.index(tx, ty)] = false;
+                     ty -%= 1;  if (x==0         ) self.static[self.index(tx, ty)] = false;
+                     ty -%= 1;  if (x==0 and y==0) self.static[self.index(tx, ty)] = false;
+         tx +%= 1;              if (         y==0) self.static[self.index(tx, ty)] = false;
+         tx +%= 1;              if (x==3 and y==0) self.static[self.index(tx, ty)] = false;
    }              
 
 // use the middle bits of the square of the coord to create the index.  No need
@@ -276,7 +282,7 @@ const Hash = struct {
         if (Threads == 1) 
             i = self.hash[h]
         else
-            i = @atomicLoad(?*Cell, &self.hash[h], .Monotonic);
+            i = @atomicLoad(?*Cell, &self.hash[h], .Acquire);
         
         while (true) {
             
@@ -284,29 +290,32 @@ const Hash = struct {
             
             while (i) |c| {
                 if (x == c.p.x and y == c.p.y) {
-                    const v = @atomicRmw(u8,&c.v,.Add,10,.Monotonic);
-                    if (v > 2) return;                         
-                    check.items[iCheck] = c;                   // potential survivor, add to checklist if not already done for births
-                    iCheck += Threads;
+                    if (Threads == 1) 
+                        c.v += 10
+                    else
+                        _ = @atomicRmw(u8,&c.v,.Add,10,.Monotonic);
+                    //if (v > 2) return;                         
+                    //check.items[iCheck] = c;                   // potential survivor, add to checklist if not already done for births
+                    //iCheck += Threads;
                     return;
                 }
                 i = c.n;          // advance to the next cell
             }
-            cells.items[iCells] = Cell.init(Point{.x=x, .y=y}, head, 10);               // cell not in heap so add it or try too 
+            cells.items[iCells] = Cell{.p=p, .n=head, .v=10};     // cell not in heap, add it.  Note iCells is threadlocal. 
             if (Threads == 1) {
                 self.hash[h] = &cells.items[iCells];
-                check.items[iCheck] = &cells.items[iCells];                             // add to check list
+                //check.items[iCheck] = &cells.items[iCells];     // add to check list
                 iCells += Threads;                                                     
-                iCheck += Threads;
+                //iCheck += Threads;
                 return;
             } else {
-                if (@cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .Acquire, .Monotonic)) |tmp| {
+                if (@cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .AcqRel, .Acquire)) |tmp| {
                     i = tmp;
                     // bbb += 1;
                 } else {                    
-                    check.items[iCheck] = &cells.items[iCells];                         // add to check list
-                    iCheck += Threads;
-                    iCells += Threads;                                                  // commit the Cell
+                    //check.items[iCheck] = &cells.items[iCells];  // add to check list
+                    //iCheck += Threads;
+                    iCells += Threads;                             // commit the Cell
                     return;
                 }
             }            
@@ -318,8 +327,8 @@ const Hash = struct {
         const x = p.x;
         const y = p.y;
         
-        if (self.static[self.index(x>>2, y>>2)])
-            return;
+        //if (self.static[self.index(x>>2, y>>2)])
+        //    return;
 
         const h = self.index(x,y);  // zig does not have 2D dynamic arrays so we fake it...
         
@@ -328,7 +337,7 @@ const Hash = struct {
         if (Threads == 1) 
             i = self.hash[h]
         else 
-            i = @atomicLoad(?*Cell, &self.hash[h], .Monotonic);
+            i = @atomicLoad(?*Cell, &self.hash[h], .Acquire);
             
         while (true) {
             
@@ -336,21 +345,24 @@ const Hash = struct {
         
             while (i) |c| {
                 if (x == c.p.x and y == c.p.y) {
-                    const v = @atomicRmw(u8,&c.v,.Add,1,.Monotonic);                                            
-                    if (v != 2) return;            // v+1 is not 3, this is not a possible birth                            
-                    check.items[iCheck] = c;       // potential birth, add to checklist
-                    iCheck += Threads;
+                    if (Threads == 1)
+                        c.v += 1
+                    else
+                        _ = @atomicRmw(u8,&c.v,.Add,1,.Monotonic); 
+                    //if (v != 2) return;            // v+1 is not 3, this is not a possible birth                            
+                    //check.items[iCheck] = c;       // potential birth, add to checklist
+                    //iCheck += Threads;
                     return;
                 }
                 i = c.n;          // advance to the next cel
             }
-            cells.items[iCells] = Cell.init(Point{.x=x, .y=y}, head, 1);  // cell not in heap so add it (maybe)
+            cells.items[iCells] = Cell{.p=p, .n=head, .v=1};  // cell not in heap, add it.  Note iCells is threadlocal.
             if (Threads == 1) {
                 self.hash[h] = &cells.items[iCells];
                 iCells += Threads;
                 return;
             } else {
-                if (@cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .Acquire, .Monotonic)) |tmp| {
+                if (@cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .AcqRel, .Acquire)) |tmp| {
                     i = tmp;
                     // bbb += 1;
                 } else {                                    
@@ -363,7 +375,7 @@ const Hash = struct {
     
 };
 
-fn sum(v:[16]i32, t:isize) i32 {                        // tool used by autotracking 
+fn sum(v:[Track]i32, t:isize) i32 {                        // tool used by autotracking 
   var i:u32 = 0; var s:i32 = 0;
   while (i < t) : (i += 1) s += v[i];
   return s;
@@ -373,18 +385,20 @@ var screen:display.Buffer = undefined;
 
 const origin:u32 = 1_000_000_000;                           // about 1/4 of max int which is (near) optimal when both index & tile hashes are considered
 
-var cbx:i64 = undefined;                                    // starting center of activity 
-var cby:i64 = undefined;
+var cbx:usize = undefined;                                    // starting center of activity 
+var cby:usize = undefined;
 
-var xl:i64 = origin;                                        // window at origin to start, size to be set
-var xh:i64 = 0;   
-var yl:i64 = origin; 
-var yh:i64 = 0;
-                                                                        
-var dx = [16]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };      // used to track activity for autotracking
-var ix = [16]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-var dy = [16]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
-var iy = [16]i32{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+var xl:usize = origin;                                        // window at origin to start, size to be set
+var xh:usize = 0;   
+var yl:usize = origin; 
+var yh:usize = 0;
+             
+const Track = 6;
+
+var dx = [_]i32{0} ** Track;                                // used to track activity for autotracking
+var ix = [_]i32{0} ** Track;
+var dy = [_]i32{0} ** Track;
+var iy = [_]i32{0} ** Track;
 
 var tg:isize = 1;                                           // number of generations used for autotracking, if negitive autotracking is disabled
 var zg:usize = 0;
@@ -414,7 +428,7 @@ var newgrid:Hash = undefined;                                // what will be com
 //      };
 //  }
 
-var checkLen=[_]usize{undefined} ** Threads;            // array to record the iCheck and iCells values when exiting threads
+//var checkLen=[_]usize{undefined} ** Threads;            // array to record the iCheck and iCells values when exiting threads
 var cellsLen=[_]usize{undefined} ** Threads;
 var running=[_]std.Thread.Mutex{std.Thread.Mutex{}} ** Threads;        // track which threads are currently running
 var processing=[_]bool{false} ** Threads;
@@ -427,11 +441,11 @@ var working:usize = 1;
 var displaying:usize = 1;
 var checking:bool = false;
 
-threadlocal var iCheck:usize = undefined;                // Index into the check and cell subarrays
+//qthreadlocal var iCheck:usize = undefined;                // Index into the check and cell subarrays
 threadlocal var iCells:usize = undefined;
 
-var cellsMax:usize = 0;                                  // largest length of the checkLen and cellLen subarrays
-var checkMax:usize = 0;
+var cellsMax:usize = 0;                                     // largest length of the cellLen subarrays
+//var checkMax:usize = 0;
 
 pub fn worker(t:usize) void {
     
@@ -455,7 +469,7 @@ pub fn worker(t:usize) void {
         if (t==0)                                              // depending on the thread & checking, do the work
             display.push(screen) catch {}                      
         else if (checking)                                     
-            processCheck(t)                                    
+            processCells(t)                                    
         else                                                   
             processAlive(t);                                       
         {                                                      
@@ -471,14 +485,14 @@ pub fn processAlive(t:usize) void {
     
     var list = &alive[t];                   // extacting x and y and using them does not add more speed here
     
-    iCheck = t;                             // threadlocal vars, we trade memory for thread safey and speed
-    iCells = t;                             // and treat the arrayList as dynamic arrays
-    
+    // iCheck = t;                          
+    iCells = t;                             // threadlocal vars, we trade memory for thread safey and speed
+                                            // and treat the arrayList as dynamic arrays
     var i:usize = 0;
 
     while (i < list.items.len) {            // add cells to the hash to enable next generation calculation
         
-        var p = list.items[i];              // extract the point                                    
+        var p = list.items[i];              // extract the point                                     
         
         if (grid.static[grid.index(p.x>>2, p.y>>2)]) {
             i += 1;                                      // keep static cells in alive list - they are stable
@@ -487,30 +501,30 @@ pub fn processAlive(t:usize) void {
             _ = list.swapRemove(i);         // this is why we use alive[] instead of the method used with check and cells...
         }                                         
 
-        // add effect of the cell on the surrounding area, addNear just returns if p is in a static area
+        // add effect of the cell on the surrounding area, if not in a static area
         
-        p.x +%= 1;              grid.addNear(p);  
-                    p.y +%= 1;  grid.addNear(p);
-        p.x -%= 1;              grid.addNear(p);
-        p.x -%= 1;              grid.addNear(p);
-                    p.y -%= 1;  grid.addNear(p);
-                    p.y -%= 1;  grid.addNear(p);
-        p.x +%= 1;              grid.addNear(p);
-        p.x +%= 1;              grid.addNear(p);
+        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);   // going static check before addNear call saves ~2%
+                    p.y +%= 1;  if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
+        p.x -%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
+        p.x -%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
+                    p.y -%= 1;  if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
+                    p.y -%= 1;  if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
+        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
+        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
         
         // if cell is within the display window update the screen buffer
         
         if (p.x >= xl and p.x <= xh and p.y >= yl and p.y <= yh) {
-            screen.cellRef(@intCast(usize,p.y-yl+1),@intCast(usize,p.x-xl)).char = 'O';
+            screen.cellRef(p.y-yl+1,p.x-xl).char = 'O';
         }        
     }    
-    std.debug.assert(iCheck < check.capacity);  // do some safely checks, just in case...
+    //std.debug.assert(iCheck < check.capacity);  // do some safely checks, just in case...
     std.debug.assert(iCells < cells.capacity);
-    checkLen[t] = iCheck;                       // save the sizes of the check and cell arraylist sublists
+    //checkLen[t] = iCheck;                       // save the sizes of the check and cell arraylist sublists
     cellsLen[t] = iCells;  
 }
     
-pub fn processCheck(t:usize) void {     // this only gets called in threaded mode when checkMax exceed the checkThreading threshold
+pub fn processCells(t:usize) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
 
     var _ix:i32 = 0;    // use local copies so tracking works (the updates can race and when it happens to often tracking fails)
     var _iy:i32 = 0;
@@ -520,14 +534,14 @@ pub fn processCheck(t:usize) void {     // this only gets called in threaded mod
     var k:usize = 0;                                       // loop thru check arrayList balancing the alive[] lists in a thread safe (enough) way
     while (k < Threads) : (k+=1) {
         var i:usize = k + Threads*t;
-        while (i < checkLen[k]) : (i+=Threads*Threads) {   // we could scan all cells but check is much smaller (25-35% of cells)
-            const c = check.items[i];
-            const v = c.v;
-            if (v == 12 or v == 13) {                      // active cell that survives
+        while (i < cellsLen[k]) : (i+=Threads*Threads) {   // we could scan all cells but check is much smaller (25-35% of cells)
+            const c = cells.items[i];
+            //const v = c.v;
+            if (c.v == 12 or c.v == 13) {                  // active cell that survives
                 alive[t].appendAssumeCapacity(c.p);
                 continue;
             }
-            if (v == 3) {                                  // birth so add to alive list & flag tile(s) as active
+            if (c.v == 3) {                                // birth so add to alive list & flag tile(s) as active
                 alive[t].appendAssumeCapacity(c.p);
                 newgrid.setActive(c.p);
                 if (c.p.x > cbx) _ix += 1 else _dx += 1;   // info for auto tracking of activity (births)
@@ -535,7 +549,7 @@ pub fn processCheck(t:usize) void {     // this only gets called in threaded mod
                 b += 1;                                    // can race, not critical 
                 continue;
             } 
-            if (v > 9 ) {                                  // cell dies mark tile(s) as active
+            if (c.v > 9 ) {                                // cell dies mark tile(s) as active
                 newgrid.setActive(c.p);
                 if (c.p.x > cbx) _ix -= 1 else _dx -= 1;   // info for auto tracking of activity (deaths)
                 if (c.p.y > cby) _iy -= 1 else _dy -= 1;
@@ -564,7 +578,7 @@ pub fn main() !void {
         alive[t] = std.ArrayList(Point).init(allocator);
         defer alive[t].deinit();
     }                                       // make sure to cleanup the arrayList(s)
-    defer check.deinit();               
+    //defer check.deinit();               
     defer cells.deinit();
     defer grid.deinit();                    // this also cleans up newgrid's storage
     
@@ -604,7 +618,7 @@ pub fn main() !void {
                                     t = if (t<Threads-1) t+1 else 0; 
                                 }
                             }
-                            try alive[t].append(Point.init(X,Y)); X+=1; pop+=1; 
+                            try alive[t].append(Point{.x=X, .y=Y}); X+=1; pop+=1; 
                         }
                     },
       '0'...'9' => {count=count*10+(c-'0');},
@@ -621,14 +635,14 @@ pub fn main() !void {
     var s:u32 = 0;          // update display even 2^s generations
     var static:usize = 0;   // cells that do not change from gen to gen
     
-    var inc:i64 = 20;                                   // max ammount to move the display window at a time
+    var inc:usize = 20;                                 // max ammount to move the display window at a time
 
 // set initial display window
 
-    cbx = @divTrunc(xh-@intCast(i64,origin),2)+origin;  // starting center of activity 
-    cby = @divTrunc(yh-@intCast(i64,origin),2)+origin;
+    cbx = @divTrunc(xh-origin,2)+origin;                // starting center of activity 
+    cby = @divTrunc(yh-origin,2)+origin;
 
-    xl = cbx - cols/2;
+    xl = cbx - cols/2;                                  // starting window
     xh = xl + cols - 1;  
     yl = cby - rows/2; 
     yh = yl + rows - 2;
@@ -649,9 +663,9 @@ pub fn main() !void {
         for (alive[t].items) |p| { newgrid.setActive(p); }   // set all tiles active for the first generation
     }
     
-    try check.ensureCapacity(pop*6+3);    // prepare for main loop
-    checkMax = check.capacity-1; 
-    try check.resize(checkMax);           // allow access to all allocated items
+    //try check.ensureCapacity(pop*6+3);    // prepare for main loop
+    //checkMax = check.capacity-1; 
+    //try check.resize(checkMax);           // allow access to all allocated items
         
     b = @intCast(u32,pop);                // everything is a birth at the start
         
@@ -684,11 +698,11 @@ pub fn main() !void {
             .down   => { cby -= 2*inc; if (tg>0) tg = -tg; },
             .left   => { cbx += 2*inc; if (tg>0) tg = -tg; },
             .right  => { cbx -= 2*inc; if (tg>0) tg = -tg; },
-            .escape => { return; },      // quit
+            .escape => { return; },                                 // quit
              .other => |data| {   const eql = std.mem.eql;
                                   if (eql(u8,"t",data)) {
                                       if (tg>0) { 
-                                          tg = @rem(tg,6)+1;   // 2, 3 & 4 are the most interesting for tracking
+                                          tg = @rem(tg,Track)+1;    // 2, 3 & 4 are the most interesting for tracking
                                       } else 
                                           tg = -tg; 
                                       if (zg >= tg) 
@@ -716,8 +730,8 @@ pub fn main() !void {
         try cells.ensureCapacity((pop-static)*9);       // 9 will always work, we might be able to get away with a lower multiplier
         try cells.resize(cells.capacity-1);             // arrayList length to max 
         
-        try check.ensureCapacity(std.math.max((b+d)*9*Threads,5*checkMax/4));    // resize the list of cells that might change state
-        try check.resize(check.capacity-1);
+        //try check.ensureCapacity(std.math.max((b+d)*9*Threads,5*checkMax/4));    // resize the list of cells that might change state
+        //try check.resize(check.capacity-1);
         
         // wait for thread to finish before (possibily) changing anything to do with the display
         
@@ -773,7 +787,7 @@ pub fn main() !void {
         }
         f.release();
         
-        checkMax = 0;
+        //checkMax = 0;
         cellsMax = 0;
         static = 0;
         
@@ -781,7 +795,7 @@ pub fn main() !void {
         t = 0;                                          
         while (t<Threads) : ( t+=1 ) {  
             static += alive[t].items.len;
-            checkMax = std.math.max(checkMax,checkLen[t]);
+            //checkMax = std.math.max(checkMax,checkLen[t]);
             cellsMax = std.math.max(cellsMax,cellsLen[t]);
         } 
         
@@ -801,7 +815,7 @@ pub fn main() !void {
 
         var tt = if (delay>0) ">" else " ";    // needed due to 0.71 compiler buglet with if in print args
         
-        _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {}/{}  window({}) {},{}",.{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, checkMax, tg, xl-origin, yl-origin});
+        _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{}",.{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, tg, @intCast(i64,xl-origin), @intCast(i64,yl-origin)});
         
         //_ = try screen.cursorAt(1,0).writer().print("debug {} {} {}, {} {} {}, {} {} {}, {} {}",.{alive[0].items.len,cellsLen[0]/3,checkLen[0]/3,alive[1].items.len,cellsLen[1]/3,checkLen[1]/3,alive[2].items.len,cellsLen[2]/3,checkLen[2]/3,bbb,ddd});
         
@@ -832,10 +846,10 @@ pub fn main() !void {
         
         t = 0;                                          // make sure the alive[] arraylists can grow
         while (t<Threads) : ( t+=1 ) {
-            try alive[t].ensureCapacity(alive[t].items.len+checkMax+2);
+            try alive[t].ensureCapacity(alive[t].items.len+cellsMax/2+2);
         }
 
-        if (checkMax > checkThreading and Threads>1) {                   
+        if (cellsMax > cellsThreading and Threads>1) {                   
             
             checking = true;                                            // enabling threading here costs cpu only help for very large checkMax  
             
@@ -845,7 +859,7 @@ pub fn main() !void {
             }
             f.release();                                                // let threads record completions
             
-            processCheck(0);                                            // use this thread too
+            processCells(0);                                            // use this thread too
             
             f = fini.acquire();
             while (@atomicLoad(usize,&working,.Acquire)>1) {            // wait for all worker threads to finish
@@ -855,18 +869,18 @@ pub fn main() !void {
         } else {
             t = 0;                                                      // in most cases this is the faster option
             while (t<Threads) : (t+=1) 
-                processCheck(t);
+                processCells(t);
         }            
                                        
         // higher rates yield smaller increments 
-        inc = std.math.max(16-std.math.log2(@intCast(i64,rate+1)),1);
+        inc = std.math.max(16-std.math.log2(rate+1),1);
         
         // if there are enough |births-deaths| left or right of cbx adjust to eventually move the display window.
         if (tg>0) {
             const aa = std.math.absCast(sum(ix,tg));
             const bb = std.math.absCast(sum(dx,tg));
             if (std.math.absCast(aa-bb) > inc) {
-                cbx += if (aa > bb) inc else -inc;
+                if (aa > bb) cbx += inc else cbx -= inc;
             }
         }
             
@@ -875,7 +889,7 @@ pub fn main() !void {
             const aa = std.math.absCast(sum(iy,tg));
             const bb = std.math.absCast(sum(dy,tg));
             if (std.math.absCast(aa-bb) > inc) {
-                cby += if (aa > bb) inc else -inc;
+                if (aa > bb) cby += inc else cby -= inc;
             }
         }
         
