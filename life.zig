@@ -46,11 +46,10 @@ const display = @import("zbox");
 // other.  We also track 4 x 4 areas ( eg hash(x/4, y/4)) flagging each area static if no births or deaths occur in the area.  Any cells
 // in a static area survive into the next generation.  We still have to add the effect of these cell on any cell in an ajoining non 
 // static area.  The effect of all this is to drasticly limit the number of cells we need to work with.  Once we finsh processing 
-// the alive arraylist (processAlive), we start a thread to update the display and, using the cells list (processCells)
-// update the alive lists for the next generation.  To make being thread safe easier we keep alive[threads] lists of alive points.  
-// ProcessCheck in designed to be thread safe, and more importantly, balances the alive lists and updates the static 4x4 area flags
-// when we find a birth or death.  It also gathers data to allow autotracking of activity. The check list typically is only 25-35% 
-// of the size if the cells arrayList. 
+// the alive arraylist (processAlive), we start a thread to update the display and more to process the cells list (processCells) to 
+// update the alive[] lists for the next generation.  To make being thread safe easier we keep alive[threads] lists of alive points.  
+// ProcessCells in designed to be thread safe, and just as important, it balances the alive lists and updates the static 4x4 area flags
+// when we find a birth or death.  It also gathers data to allow autotracking of activity. 
 //
 // The way the cells are added in AddCell and AddNear is interesting.  At the start of the process we record the cells head of list.
 // If the cell does not exist in the list we try to add it.  In the multithreaded case, another thread may have already done this, 
@@ -309,15 +308,12 @@ const Hash = struct {
                 //iCheck += Threads;
                 return;
             } else {
-                if (@cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .AcqRel, .Acquire)) |tmp| {
-                    i = tmp;
-                    // bbb += 1;
-                } else {                    
+                i = @cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .AcqRel, .Acquire) orelse {                    
                     //check.items[iCheck] = &cells.items[iCells];  // add to check list
                     //iCheck += Threads;
                     iCells += Threads;                             // commit the Cell
                     return;
-                }
+                };
             }            
         }
     }
@@ -362,13 +358,10 @@ const Hash = struct {
                 iCells += Threads;
                 return;
             } else {
-                if (@cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .AcqRel, .Acquire)) |tmp| {
-                    i = tmp;
-                    // bbb += 1;
-                } else {                                    
+                i = @cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .AcqRel, .Acquire) orelse {                                   
                     iCells += Threads;
                     return;
-                }
+                };
             }
         }
     }
