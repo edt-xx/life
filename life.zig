@@ -65,7 +65,7 @@ const display = @import("zbox");
 
 // set the pattern to run below
 
-const pattern = p_1_700_000m;
+const pattern = p_95_206_595m;
 
 //const pattern = p_pony_express;
 //const pattern = p_95_206_595m;
@@ -288,7 +288,7 @@ const Hash = struct {
             const head = i;
             
             while (i) |c| {
-                if (x == c.p.x and y == c.p.y) {
+                if (y == c.p.y and x == c.p.x) {
                     if (Threads == 1) 
                         c.v += 10
                     else
@@ -340,7 +340,7 @@ const Hash = struct {
             const head = i;
         
             while (i) |c| {
-                if (x == c.p.x and y == c.p.y) {
+                if (y == c.p.y and x == c.p.x) {
                     if (Threads == 1)
                         c.v += 1
                     else
@@ -524,10 +524,10 @@ pub fn processCells(t:usize) void {     // this only gets called in threaded mod
     var _dx:i32 = 0;
     var _dy:i32 = 0;
     
-    var k:usize = 0;                                       // loop thru check arrayList balancing the alive[] lists in a thread safe (enough) way
+    var k:usize = 0;                                       // loop thru cells arraylist
     while (k < Threads) : (k+=1) {
         var i:usize = k + Threads*t;
-        while (i < cellsLen[k]) : (i+=Threads*Threads) {   // we could scan all cells but check is much smaller (25-35% of cells)
+        while (i < cellsLen[k]) : (i+=Threads*Threads) {   // scan all cells in a thread safe way that balances the alive[] lists
             const c = cells.items[i];
             //const v = c.v;
             if (c.v == 12 or c.v == 13) {                  // active cell that survives
