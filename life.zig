@@ -118,7 +118,7 @@ const Point = struct {
 const Cell = struct {
     p: Point,                               // point for this cell
     n: ?*Cell,                              // pointer for the next cell in the same hash chain
-    v: u8,                                  // value used to caculate next generation
+    v: u8,                                  // cells value
 };
 
 var theSize:usize = 0;
@@ -126,8 +126,8 @@ var theSize:usize = 0;
 const Hash = struct {
     hash:[]?*Cell,              // pointers into the cells arraylist (2^order x 2^order hash table)
     static: []bool,             // flag if 4x4 area is static
-    index:fn (u32, u32) u32,    // hash function to use, population dependent
-    order:u32,                  // hash size is 2^(order+order)
+    order:u5,                   // hash size is 2^(order+order)
+    shift:u5,   
        
     fn init(size:usize) !Hash {
                     
@@ -139,44 +139,20 @@ const Hash = struct {
         if (size < theSize/2 or size > theSize)     // reduce order bouncing and (re)allocates
             theSize = size;
         
-        switch (std.math.log2(theSize)) {           // allows number of cells to reach the hash size before uping the order
-         0...11 => self = Hash { .hash=undefined, 
-                                 .static=undefined,
-                                 .index = i_64,
-                                 .order = 6 },
-        12...13 => self = Hash { .hash=undefined, 
-                                 .static=undefined,
-                                 .index = i_128,
-                                 .order = 7 },
-        14...15 => self = Hash { .hash=undefined,
-                                 .static=undefined,
-                                 .index = i_256, 
-                                 .order = 8 },
-        16...17 => self = Hash { .hash=undefined,
-                                 .static=undefined,
-                                 .index = i_512,
-                                 .order = 9 },
-        18...19 => self = Hash { .hash=undefined,
-                                 .static=undefined,
-                                 .index = i_1024, 
-                                 .order = 10, },
-        20...21 => self = Hash { .hash=undefined,
-                                 .static=undefined,
-                                 .index = i_2048,
-                                 .order = 11 },
-           else => self = Hash { .hash=undefined,
-                                 .static=undefined,
-                                 .index = i_4096,
-                                 .order = 12 },
-        }
-               
-        return self;
+        const o = @intCast(u5,std.math.clamp(std.math.log2(theSize)/2+1, 6, 12));
+        
+        return Hash{ .hash=undefined, 
+                     .static=undefined,
+                     .order = o, 
+                     .shift = @intCast(u5,31-o+1),
+                   };        
     }
     
     fn assign(self:*Hash,s:Hash) !void {
         if (self.order != s.order) {
             self.order = s.order;
-            self.index = s.index;
+            self.shift = s.shift;
+            //self.index = s.index;
             allocator.free(self.hash);
             self.hash = try allocator.alloc(?*Cell,std.math.shl(usize,1,2*self.order));
         }
@@ -232,42 +208,12 @@ const Hash = struct {
  
 // passing x, y instead of a point lets the compiler generate beter code (~25% faster) and speed counts here
  
-    fn i_64(x:u32, y:u32) u32 { 
-        return (( x*%x >> 26) | 
-                ( y*%y >> 26 << 6));     // compiler 0.71 generates faster code using left shift vs a bit mask.
+    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {  // compiler 0.71 generates better code using left shift vs a bit mask.
+        return (( x*%x >> self.shift) | 
+                ( y*%y >> self.shift << self.order));     
     } 
-    
-    fn i_128(x:u32, y:u32) u32 { 
-        return (( x*%x >> 25) | 
-                ( y*%y >> 25 << 7));     
-    }
-    
-    fn i_256(x:u32, y:u32) u32 { 
-        return (( x*%x >> 24) | 
-                 ( y*%y >> 24 << 8)); 
-    }
-    
-    fn i_512(x:u32, y:u32) u32 {  
-         return (( x*%x >> 23) | 
-                 ( y*%y >> 23 << 9)); 
-    }
-
-    fn i_1024(x:u32, y:u32) u32 { 
-        return (( x*%x >> 22) |
-                ( y*%y >> 22 << 10));
-    }
-
-    fn i_2048(x:u32, y:u32) u32 { 
-        return (( x*%x >> 21) |
-                ( y*%y >> 21 << 11));
-    }
-    
-    fn i_4096(x:u32, y:u32) u32 {  
-        return (( x*%x >> 20) |
-                ( y*%y >> 20 << 12));
-    }
-
-    // find a Cell in the heap and increment its value, if not known, link it in and set its initial value
+ 
+// find a Cell in the heap and increment its value, if not known, link it in and set its initial value
     
     fn addCell(self:*Hash, p:Point) void { 
         
@@ -318,6 +264,8 @@ const Hash = struct {
         }
     }
     
+// find a Cell in the heap and increment its value, if not known, link it in and set its initial value
+ 
     fn addNear(self:*Hash, p:Point) void { 
         
         const x = p.x;
@@ -487,9 +435,9 @@ pub fn processAlive(t:usize) void {
         
         var p = list.items[i];              // extract the point                                     
         
-        if (grid.static[grid.index(p.x>>2, p.y>>2)]) {
-            i += 1;                                      // keep static cells in alive list - they are stable
-        } else {
+        if (grid.static[grid.index(p.x>>2, p.y>>2)])
+            i += 1                                     // keep static cells in alive list - they are stable
+        else {
             grid.addCell(p);  
             _ = list.swapRemove(i);         // this is why we use alive[] instead of the method used with check and cells...
         }                                         
@@ -530,24 +478,23 @@ pub fn processCells(t:usize) void {     // this only gets called in threaded mod
         while (i < cellsLen[k]) : (i+=Threads*Threads) {   // scan all cells in a thread safe way that balances the alive[] lists
             const c = cells.items[i];
             //const v = c.v;
-            if (c.v == 12 or c.v == 13) {                  // active cell that survives
-                alive[t].appendAssumeCapacity(c.p);
-                continue;
-            }
-            if (c.v == 3) {                                // birth so add to alive list & flag tile(s) as active
-                alive[t].appendAssumeCapacity(c.p);
-                newgrid.setActive(c.p);
-                if (c.p.x > cbx) _ix += 1 else _dx += 1;   // info for auto tracking of activity (births)
-                if (c.p.y > cby) _iy += 1 else _dy += 1;
-                b += 1;                                    // can race, not critical 
-                continue;
-            } 
-            if (c.v > 9 ) {                                // cell dies mark tile(s) as active
-                newgrid.setActive(c.p);
-                if (c.p.x > cbx) _ix -= 1 else _dx -= 1;   // info for auto tracking of activity (deaths)
-                if (c.p.y > cby) _iy -= 1 else _dy -= 1;
-                d += 1;                                    // can race, not critical 
-            }
+            if (c.v < 10) {
+                if (c.v == 3) {                                // birth so add to alive list & flag tile(s) as active
+                    alive[t].appendAssumeCapacity(c.p);
+                    newgrid.setActive(c.p);
+                    if (c.p.x > cbx) _ix += 1 else _dx += 1;   // info for auto tracking of activity (births)
+                    if (c.p.y > cby) _iy += 1 else _dy += 1;
+                    b += 1;                                    // can race, not critical 
+                } 
+            } else 
+                if (c.v == 12 or c.v == 13)                    // active cell that survivest
+                    alive[t].appendAssumeCapacity(c.p)
+                else {
+                    newgrid.setActive(c.p);
+                    if (c.p.x > cbx) _ix -= 1 else _dx -= 1;    // info for auto tracking of activity (deaths)
+                    if (c.p.y > cby) _iy -= 1 else _dy -= 1;
+                    d += 1;                                     // can race, not critical 
+                }
         }
     } 
     ix[zg] += _ix;                                         // if this races once in a blue moon its okay
