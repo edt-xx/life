@@ -73,7 +73,7 @@ const pattern = p_1_700_000m;
 //const pattern = p_max;
 //const pattern = p_52513m;
 
-const Threads = 4;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
+const Threads = 3;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
 const cellsThreading = 1_000;      // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops, now a net gain.
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
