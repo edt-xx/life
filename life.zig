@@ -65,7 +65,7 @@ const display = @import("zbox");
 
 // set the pattern to run below
 
-const pattern = p_95_206_595m;
+const pattern = p_1_700_000m;
 
 //const pattern = p_pony_express;
 //const pattern = p_95_206_595m;
@@ -80,26 +80,22 @@ const cellsThreading = 1_000;      // Condition vars and -lpthread (std.Thread.C
 //
 // Threads  gen         rate    cpu
 // 1        100,000     330s    15%
-// 2        100,000     290/s   24%     using rmw in addCell and addNear seems to be the reason for this decrease
-// 3        100,000     370/s   37%
-// 4        100,000     400/s   46%
-// 5        100,100     450/s   58%
-// 6        100,000     500/s   66%
-// 7        100,000     540/s   73%
+// 2        100,000     290/s   27%     using rmw in addCell and addNear seems to be the reason for this decrease
+// 3        100,000     400/s   38%
+// 4        100,000     440/s   46%
+// 5        100,100     470/s   57%
+// 6        100,000     520/s   67%
+// 7        100,000     550/s   73%
 // 8        100,000     500/s   68%     The update threads + display thread > CPU threads so we take longer in processCells/displayUqpdate
 //
-// operf with 6 threads reports:
+// operf with 6 threads reports (anything over 1%):
 //
 //CPU: Intel Haswell microarchitecture, speed 4000 MHz (estimated)
 //Counted CPU_CLK_UNHALTED events (Clock cycles when not halted) with a unit mask of 0x00 (No unit mask) count 100000
 //samples  %        symbol name
-//15263458 72.1322  processAlive
-//2586765  12.2246  processCells
-//1723498   8.1449  Hash.i_512
-//831303    3.9286  Hash.setActive
-//350329    1.6556  worker
-//323100    1.5269  Hash.i_256
-
+//15881082 81.1178  processAlive
+//3088177  15.7739  processCells
+//479568    2.4495  worker
 
 const print = std.debug.print;
 
