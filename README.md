@@ -20,12 +20,15 @@ window(-2) would tell us autotracking is disabled, use cursor keys to move windo
 The last two numbers are the window position.
 
     s, f        : limits the generation rate, s halves the rate and f doubles it (when limited you will see rate>xxx/s )
+                  period and commas are aliases for s & f (s=, and f=.)
 
     +, -        : only show every nth generation.  + doubles n, - halves n (generation xxxx(n) ...)
 
     cursor keys : allow manual positioning of the window using cursor keys (window(-autotracking generations) ...)
 
     t           : if manual tracking is enabled, disable it, if disabled toggle the number of generations used for autotracking
+    
+    w           : toggle window postion and tracking.  Patterns often have two interesting area, this lets you toggle between them.
 
     esc, q      : will exit the program
 

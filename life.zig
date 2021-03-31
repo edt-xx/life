@@ -30,6 +30,8 @@ const display = @import("zbox");
 //
 // t           : if manual tracking is enabled, disable it, if disabled toggle the number of generations used for autotracking
 //
+// w           : toggle window position and tracking.  Often patterns have two interesting areas.  This allows switching between them.
+//
 // esc, q      : will exit the program
 //
 // The algorithm used here was developed in the late 70s or early 80s.  I first implemented it on an OSI superboard II using 
@@ -323,6 +325,8 @@ const origin:u32 = 1_000_000_000;                           // about 1/4 of max 
 
 var cbx:usize = undefined;                                    // starting center of activity 
 var cby:usize = undefined;
+var cbx_:usize = undefined;                                   // alternate center of activity (toggle with w) 
+var cby_:usize = undefined;
 
 var xl:usize = origin;                                        // window at origin to start, size to be set
 var xh:usize = 0;   
@@ -337,6 +341,7 @@ var dy = [_]i32{0} ** Track;
 var iy = [_]i32{0} ** Track;
 
 var tg:isize = 1;                                           // number of generations used for autotracking, if negitive autotracking is disabled
+var tg_:isize = 1;                                          // alternate toggle
 var zg:usize = 0;
 
 var b:u32 = 0;                                              // births and deaths
@@ -576,6 +581,8 @@ pub fn main() !void {
 
     cbx = @divTrunc(xh-origin,2)+origin;                // starting center of activity 
     cby = @divTrunc(yh-origin,2)+origin;
+    cbx_ = cbx;                                         // and alternate
+    cby_ = cby;
 
     xl = cbx - cols/2;                                  // starting window
     xh = xl + cols - 1;  
@@ -643,8 +650,12 @@ pub fn main() !void {
                                       if (zg >= tg) 
                                           zg = 0; 
                                   } 
-                                  if (eql(u8,"s",data)) limit = if (limit>1) limit/2 else limit;        // limit generation rate
-                                  if (eql(u8,"f",data)) limit = if (limit<16384) limit*2 else limit;
+                                  if (eql(u8,"s",data) or eql(u8,",",data)) limit = if (limit>1) limit/2 else limit;        // limit generation rate
+                                  if (eql(u8,"f",data) or eql(u8,".",data)) limit = if (limit<16384) limit*2 else limit;
+                                  if (eql(u8,"w",data)) { const t1=cbx; cbx=cbx_; cbx_=t1; 
+                                                          const t2=cby; cby=cby_; cby_=t2; 
+                                                          const t3=tg;  tg=tg_;   tg_=t3;
+                                                        } 
                                   if (eql(u8,"+",data)) s += 1;                                         // update every 2^s generation
                                   if (eql(u8,"-",data)) s = if (s>0) s-1 else s;
                                   if (eql(u8,"q",data)) { return; }                                     // quit
