@@ -126,8 +126,8 @@ var theSize:usize = 0;
 const Hash = struct {
     hash:[]?*Cell,              // pointers into the cells arraylist (2^order x 2^order hash table)
     static: []bool,             // flag if 4x4 area is static
-    order:u5,                   // hash size is 2^(order+order)
-    shift:u5,   
+    order:u5,                   // hash size is 2^(order+order), u5 for << and >> with usize and a var
+    shift:u5,                   // avoid a subtraction in index
        
     fn init(size:usize) !Hash {
                     
@@ -144,7 +144,7 @@ const Hash = struct {
         return Hash{ .hash=undefined, 
                      .static=undefined,
                      .order = o, 
-                     .shift = @intCast(u5,31-o+1),
+                     .shift = @intCast(u5,31-o+1),      // 32-o fails with a comiplier error...
                    };        
     }
     
@@ -152,7 +152,6 @@ const Hash = struct {
         if (self.order != s.order) {
             self.order = s.order;
             self.shift = s.shift;
-            //self.index = s.index;
             allocator.free(self.hash);
             self.hash = try allocator.alloc(?*Cell,std.math.shl(usize,1,2*self.order));
         }
@@ -182,7 +181,7 @@ const Hash = struct {
         allocator.free(self.static);
     }
         
-    fn setActive(self:*Hash,p:Point) void {         // Collisions are ignored here, more tiles will be flagged as active which is okay
+    fn setActive(self:*Hash,p:Point) callconv(.Inline) void {         // Collisions are ignored here, more tiles will be flagged as active which is okay
          const t = Point{.x=p.x>>2, .y=p.y>>2};
          var tx = t.x;
          var ty = t.y;
@@ -208,7 +207,7 @@ const Hash = struct {
  
 // passing x, y instead of a point lets the compiler generate beter code (~25% faster) and speed counts here
  
-    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {  // compiler 0.71 generates better code using left shift vs a bit mask.
+    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   // compiler 0.71 generates better code using left shift vs a bit mask.
         return (( x*%x >> self.shift) | 
                 ( y*%y >> self.shift << self.order));     
     } 
