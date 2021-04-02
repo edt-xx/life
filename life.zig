@@ -75,7 +75,7 @@ const pattern = p_1_700_000m;
 //const pattern = p_max;
 //const pattern = p_52513m;
 
-const Threads = 3;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
+const Threads = 7;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
 const cellsThreading = 1_000;      // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops, now a net gain.
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
@@ -113,9 +113,9 @@ const Point = struct {
     y: u32,
 };
 
-const Cell = struct {
-    p: Point,                               // point for this cell
+const Cell = struct {    
     n: ?*Cell,                              // pointer for the next cell in the same hash chain
+    p: Point,                               // point for this cell
     v: u8,                                  // cells value
 };
 
@@ -134,7 +134,7 @@ const Hash = struct {
 // log2 of the population from the last iteration.  The ammount of memory used is a tradeoff
 // between the length of the hash/heap chains and the time taken to clear the hash array.
         
-        if (size < theSize/2 or size > theSize)     // reduce order bouncing and (re)allocates
+        if (size < theSize/2 or size > theSize)         // reduce order bouncing and (re)allocates
             theSize = size;
         
         const o = @intCast(u5,std.math.clamp(std.math.log2(theSize)/2+1, 6, 12));
@@ -155,7 +155,8 @@ const Hash = struct {
         }
         // clear the hash table pointers
         
-        // for (self.hash) |*c| c.* = null;                // from valgrind, only @memset is using the os memset call
+        // from valgrind, only @memset is using the os memset call
+        // for (self.hash) |*c| c.* = null;                
         // std.mem.set(?*Cell,self.hash,null);
         @memset(@ptrCast([*]u8,self.hash),0,@sizeOf(?*Cell)*std.math.shl(usize,1,2*self.order));
         self.static = s.static;
@@ -169,7 +170,8 @@ const Hash = struct {
         self.static = s.static;
         // mark all tiles as static to start
         
-        // for (self.static) |*t| t.* = true;           // from valgrind, only @memset uses the os memset
+        // from valgrind, only @memset uses the os memset
+        // for (self.static) |*t| t.* = true;           
         // std.mem.set(bool,self.static,true);
         @memset(@ptrCast([*]u8,self.static),1,@sizeOf(bool)*std.math.shl(usize,1,2*self.order));
     }
@@ -243,11 +245,11 @@ const Hash = struct {
                 }
                 i = c.n;          // advance to the next cell
             }
-            cells.items[iCells] = Cell{.p=p, .n=head, .v=10};     // cell not in heap, add it.  Note iCells is threadlocal. 
+            cells.items[iCells] = Cell{.p=p, .n=head, .v=10};     // cell not in heap, add it.  Note iCells is threadlocal.             
             if (Threads == 1) {
                 self.hash[h] = &cells.items[iCells];
                 //check.items[iCheck] = &cells.items[iCells];     // add to check list
-                iCells += Threads;                                                     
+                iCells += Threads;
                 //iCheck += Threads;
                 return;
             } else {
@@ -255,6 +257,7 @@ const Hash = struct {
                     //check.items[iCheck] = &cells.items[iCells];  // add to check list
                     //iCheck += Threads;
                     iCells += Threads;                             // commit the Cell
+                    std.debug.assert(iCells < cellsMax);
                     return;
                 };
             }            
@@ -305,6 +308,7 @@ const Hash = struct {
             } else {
                 i = @cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .AcqRel, .Acquire) orelse {                                   
                     iCells += Threads;
+                    std.debug.assert(iCells < cellsMax);
                     return;
                 };
             }
@@ -313,9 +317,9 @@ const Hash = struct {
     
 };
 
-fn sum(v:[Track]i32, t:isize) i32 {                        // tool used by autotracking 
+fn sum(bmd:[Track]i32, t:isize) i32 {                        // tool used by autotracking (bmd = births - deaths)
   var i:u32 = 0; var s:i32 = 0;
-  while (i < t) : (i += 1) s += v[i];
+  while (i < t) : (i += 1) s += std.math.absInt(bmd[i]) catch unreachable;
   return s;
 }
 
@@ -369,10 +373,8 @@ var newgrid:Hash = undefined;                                // what will be com
 //      };
 //  }
 
-//var checkLen=[_]usize{undefined} ** Threads;            // array to record the iCheck and iCells values when exiting threads
+//var checkLen=[_]usize{undefined} ** Threads;                      // array to record the iCheck and iCells values when exiting threads
 var cellsLen=[_]usize{undefined} ** Threads;
-var running=[_]std.Thread.Mutex{std.Thread.Mutex{}} ** Threads;        // track which threads are currently running
-var processing=[_]bool{false} ** Threads;
 var work:std.Thread.Mutex = std.Thread.Mutex{};
 var disp_work:std.Thread.Mutex = std.Thread.Mutex{};
 var fini:std.Thread.Mutex = std.Thread.Mutex{};
@@ -381,11 +383,12 @@ var done:std.Thread.Condition = std.Thread.Condition{};
 var working:usize = 1;
 var displaying:usize = 1;
 var checking:bool = false;
+var go:bool = true;
 
-//qthreadlocal var iCheck:usize = undefined;                // Index into the check and cell subarrays
+//qthreadlocal var iCheck:usize = undefined;                   // Index into the check and cell subarrays
 threadlocal var iCells:usize = undefined;
 
-var cellsMax:usize = 0;                                     // largest length of the cellLen subarrays
+var cellsMax:usize = 0;                                        // largest length of the cellLen subarrays
 //var checkMax:usize = 0;
 
 pub fn worker(t:usize) void {
@@ -400,19 +403,22 @@ pub fn worker(t:usize) void {
         counter = &working;                                    
     }                                                          
                                                                
-    while (true) {                                             
+    while (go) {                                             
         {                                                      
+            
             const w = trigger.acquire();                       // block waiting for work
             _ = @atomicRmw(usize, counter, .Add, 1, .AcqRel);  // we are now working
             w.release();
             begin.signal();                                    // tell main to check counter
-        }                                                      
-        if (t==0)                                              // depending on the thread & checking, do the work
-            display.push(screen) catch {}                      
-        else if (checking)                                     
-            processCells(t)                                    
-        else                                                   
-            processAlive(t);                                       
+        } 
+        if (go) {
+            if (t==0)                                              // depending on the thread & checking, do the work
+                display.push(screen) catch {}                      
+            else if (checking)                                     
+                processCells(t)                                    
+            else                                                   
+                processAlive(t); 
+        }
         {                                                      
             const f = fini.acquire();                          // work is now finished
             _ = @atomicRmw(usize, counter, .Sub, 1, .AcqRel);  // no longer working
@@ -460,7 +466,6 @@ pub fn processAlive(t:usize) void {
         }        
     }    
     //std.debug.assert(iCheck < check.capacity);  // do some safely checks, just in case...
-    std.debug.assert(iCells < cells.capacity);
     //checkLen[t] = iCheck;                       // save the sizes of the check and cell arraylist sublists
     cellsLen[t] = iCells;  
 }
@@ -579,9 +584,9 @@ pub fn main() !void {
 
 // set initial display window
 
-    cbx = @divTrunc(xh-origin,2)+origin;                // starting center of activity 
-    cby = @divTrunc(yh-origin,2)+origin;
-    cbx_ = cbx;                                         // and alternate
+    cbx = origin-cols/4;                                       // starting center of activity 
+    cby = origin-rows/4;
+    cbx_ = cbx;                                         // and the alternate
     cby_ = cby;
 
     xl = cbx - cols/2;                                  // starting window
@@ -609,8 +614,8 @@ pub fn main() !void {
     //checkMax = check.capacity-1; 
     //try check.resize(checkMax);           // allow access to all allocated items
         
-    b = @intCast(u32,pop);                // everything is a birth at the start
-        
+    b = @intCast(u32,pop);                  // everything is a birth at the start
+    
     var ogen:u32 = 0;                                   // info for rate calculations
     var rtime:i64 = std.time.milliTimestamp()+1_000;  
     var rate:usize = 0;
@@ -640,7 +645,10 @@ pub fn main() !void {
             .down   => { cby -= 2*inc; if (tg>0) tg = -tg; },
             .left   => { cbx += 2*inc; if (tg>0) tg = -tg; },
             .right  => { cbx -= 2*inc; if (tg>0) tg = -tg; },
-            .escape => { return; },                                 // quit
+            .escape => { go=false; dw.release(); w.release();                                       // quit
+                         while (@atomicLoad(usize,&displaying,.Acquire)>1) { done.wait(&fini); } 
+                         return; 
+                       },                       
              .other => |data| {   const eql = std.mem.eql;
                                   if (eql(u8,"t",data)) {
                                       if (tg>0) { 
@@ -650,15 +658,18 @@ pub fn main() !void {
                                       if (zg >= tg) 
                                           zg = 0; 
                                   } 
-                                  if (eql(u8,"s",data) or eql(u8,",",data)) limit = if (limit>1) limit/2 else limit;        // limit generation rate
+                                  if (eql(u8,"s",data) or eql(u8,",",data)) limit = if (limit>1) limit/2 else limit;     // limit generation rate
                                   if (eql(u8,"f",data) or eql(u8,".",data)) limit = if (limit<16384) limit*2 else limit;
                                   if (eql(u8,"w",data)) { const t1=cbx; cbx=cbx_; cbx_=t1; 
                                                           const t2=cby; cby=cby_; cby_=t2; 
                                                           const t3=tg;  tg=tg_;   tg_=t3;
                                                         } 
-                                  if (eql(u8,"+",data)) s += 1;                                         // update every 2^s generation
+                                  if (eql(u8,"+",data)) s += 1;                                                          // update every 2^s generation
                                   if (eql(u8,"-",data)) s = if (s>0) s-1 else s;
-                                  if (eql(u8,"q",data)) { return; }                                     // quit
+                                  if (eql(u8,"q",data)) { go=false; dw.release(); w.release();                                       // quit
+                                                          while (@atomicLoad(usize,&displaying,.Acquire)>1) { done.wait(&fini); } 
+                                                          return; 
+                                                        }     
                              },
               else => {},
         }
@@ -673,8 +684,9 @@ pub fn main() !void {
         
         try grid.assign(newgrid);                       // assign newgrid to grid (if order changes reallocate hash storage)
         
-        try cells.ensureCapacity((pop-static)*9);       // 9 will always work, we might be able to get away with a lower multiplier
-        try cells.resize(cells.capacity-1);             // arrayList length to max 
+        try cells.ensureCapacity((pop-static)*(8+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
+        try cells.resize(cells.capacity-1);                  // arrayList length to max
+        cellsMax = cells.capacity;
         
         //try check.ensureCapacity(std.math.max((b+d)*9*Threads,5*checkMax/4));    // resize the list of cells that might change state
         //try check.resize(check.capacity-1);
@@ -711,7 +723,7 @@ pub fn main() !void {
         pop = 0;                                            // sum to get the population
         t = 0;                                          
         while (t<Threads) : ( t+=1 ) {
-            pop += alive[t].items.len;
+            pop += alive[t].items.len+1;
         }
         
         // nnn += 1;
@@ -719,19 +731,23 @@ pub fn main() !void {
         
         checking = false;
         
-        f = fini.acquire();                                        // block completions so a quickly finishing thread is seen
-        while (@atomicLoad(usize,&working,.Acquire)<Threads) {     // wait for all worker threads to wake each other
-            begin.wait(&work);                                     // release work mutex and wait for worker to signal 
+        if (Threads > 1) {
+            f = fini.acquire();                                        // block completions so a quickly finishing thread is seen
+            while (@atomicLoad(usize,&working,.Acquire)<Threads) {     // wait for all worker threads to wake each other
+                begin.wait(&work);                                     // release work mutex and wait for worker to signal 
+            }
+            f.release();                                               // allow completions
         }
-        f.release();                                               // allow completions
                     
-        processAlive(0);                                           // Use our existing thread. 
+        processAlive(0);                                               // Use our existing thread. 
         
-        f = fini.acquire();
-        while (@atomicLoad(usize,&working,.Acquire)>1) {           // wait for all worker threads to finish
-            done.wait(&fini);
+        if (Threads > 1) {
+            f = fini.acquire();
+            while (@atomicLoad(usize,&working,.Acquire)>1) {           // wait for all worker threads to finish
+                done.wait(&fini);
+            }
+            f.release();
         }
-        f.release();
         
         //checkMax = 0;
         cellsMax = 0;
@@ -761,7 +777,7 @@ pub fn main() !void {
 
         var tt = if (delay>0) ">" else " ";    // needed due to 0.71 compiler buglet with if in print args
         
-        _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{}",.{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, tg, @intCast(i64,xl-origin), @intCast(i64,yl-origin)});
+        _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{}",.{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, tg, @intCast(i64,xl)-origin, @intCast(i64,yl)-origin});
         
         //_ = try screen.cursorAt(1,0).writer().print("debug {} {} {}, {} {} {}, {} {} {}, {} {}",.{alive[0].items.len,cellsLen[0]/3,checkLen[0]/3,alive[1].items.len,cellsLen[1]/3,checkLen[1]/3,alive[2].items.len,cellsLen[2]/3,checkLen[2]/3,bbb,ddd});
         
@@ -787,10 +803,10 @@ pub fn main() !void {
         b = 0;
         d = 0;
                        
-        newgrid = try Hash.init(cellsMax+Threads);      // newgrid hash fn based on size (get the order correct)
-        try newgrid.takeStatic(&grid);                  // if order save, reuse static array from grid otherwise reallocate it
+        newgrid = try Hash.init(cellsMax);                  // newgrid hash fn based on size (get the order correct)
+        try newgrid.takeStatic(&grid);                      // if order save, reuse static array from grid otherwise reallocate it
         
-        t = 0;                                          // make sure the alive[] arraylists can grow
+        t = 0;                                              // make sure the alive[] arraylists can grow
         while (t<Threads) : ( t+=1 ) {
             try alive[t].ensureCapacity(alive[t].items.len+cellsMax/2+2);
         }
@@ -823,8 +839,8 @@ pub fn main() !void {
         
         // if there are enough |births-deaths| left or right of cbx adjust to eventually move the display window.
         if (tg>0) {
-            const aa = std.math.absCast(sum(ix,tg));
-            const bb = std.math.absCast(sum(dx,tg));
+            const aa = sum(ix,tg);
+            const bb = sum(dx,tg);
             if (std.math.absCast(aa-bb) > inc) {
                 if (aa > bb) cbx += inc else cbx -= inc;
             }
@@ -832,8 +848,8 @@ pub fn main() !void {
             
         // if there are enough |births-deaths| above or below of cby adjust to eventually move the display window
         if (tg>0) {
-            const aa = std.math.absCast(sum(iy,tg));
-            const bb = std.math.absCast(sum(dy,tg));
+            const aa = sum(iy,tg);
+            const bb = sum(dy,tg);
             if (std.math.absCast(aa-bb) > inc) {
                 if (aa > bb) cby += inc else cby -= inc;
             }
@@ -851,11 +867,11 @@ pub fn main() !void {
             
         // switch focus of "center of activity" is moving off display window
         if (tg>0 and zg==0) {
-            if (std.math.absCast(xl - cbx + cols/2) > 4*cols/5) {
+            if (std.math.absCast(xl +% cols/2 -% cbx) > 4*cols/5)  {
                 xl = cbx - cols/2;                       
                 xh = xl + cols - 1;
             }
-            if (std.math.absCast(yl - cby + rows/2) > 4*rows/5) {
+            if (std.math.absCast(yl +% rows/2 -% cby) > 4*rows/5)  {
                 yl = cby - rows/2;
                 yh = yl + rows - 2;     // allow for the title line
             }
