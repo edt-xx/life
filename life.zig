@@ -635,9 +635,9 @@ pub fn main() !void {
     
     var ogen:u32 = 0;                                   // info for rate calculations
     var rtime:i64 = std.time.milliTimestamp()+1_000;  
-    var rate:u32 = 0;
-    var limit:u32 = 65536;                             // optimistic rate limit
-    var delay:u32 = 0;
+    var rate:usize = 1;
+    var limit:usize = 65536;                             // optimistic rate limit
+    var delay:usize = 0;
            
     var dw = disp_work.acquire();                       // block display update thread
     var w = work.acquire();                             // block processing/check update theads
@@ -896,7 +896,7 @@ pub fn main() !void {
                 yl = cby - rows/2;
                 yh = yl + rows - 2;     // allow for the title line
             }
-            zn = gen+rate/std.math.clamp(30-@clz(@TypeOf(rate),rate+1),1,10);    // 1/10 second above 8192/s down to 1s at 8/s
+            zn = gen+rate/std.math.clamp(62-@clz(@TypeOf(rate),rate+1),1,10);    // 1/10 second above 8192/s down to 1s at 8/s
         }
         
     }
