@@ -75,7 +75,7 @@ const pattern = p_1_700_000m;
 //const pattern = p_max;
 //const pattern = p_52513m;
 
-const Threads = 7;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
+const Threads = 3;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
 const cellsThreading = 1_000;      // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops, now a net gain.
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
@@ -327,15 +327,15 @@ var screen:display.Buffer = undefined;
 
 const origin:u32 = 1_000_000_000;                           // about 1/4 of max int which is (near) optimal when both index & tile hashes are considered
 
-var cbx:usize = undefined;                                    // starting center of activity 
-var cby:usize = undefined;
-var cbx_:usize = undefined;                                   // alternate center of activity (toggle with w) 
-var cby_:usize = undefined;
+var cbx:u32 = undefined;                                    // starting center of activity 
+var cby:u32 = undefined;
+var cbx_:u32 = undefined;                                   // alternate center of activity (toggle with w) 
+var cby_:u32 = undefined;
 
-var xl:usize = origin;                                        // window at origin to start, size to be set
-var xh:usize = 0;   
-var yl:usize = origin; 
-var yh:usize = 0;
+var xl:u32 = origin;                                        // window at origin to start, size to be set
+var xh:u32 = 0;   
+var yl:u32 = origin; 
+var yh:u32 = 0;
              
 const Track = 6;
 
@@ -346,7 +346,8 @@ var iy = [_]i32{0} ** Track;
 
 var tg:isize = 1;                                           // number of generations used for autotracking, if negitive autotracking is disabled
 var tg_:isize = 1;                                          // alternate toggle
-var zg:usize = 0;
+var zg:usize = 0;                                           // index for history
+var zn:usize = 0;                                           // generation of next display window switch
 
 var b:u32 = 0;                                              // births and deaths
 var d:u32 = 0;    
@@ -373,28 +374,28 @@ var newgrid:Hash = undefined;                                // what will be com
 //      };
 //  }
 
-//var checkLen=[_]usize{undefined} ** Threads;                      // array to record the iCheck and iCells values when exiting threads
-var cellsLen=[_]usize{undefined} ** Threads;
-var work:std.Thread.Mutex = std.Thread.Mutex{};
-var disp_work:std.Thread.Mutex = std.Thread.Mutex{};
-var fini:std.Thread.Mutex = std.Thread.Mutex{};
-var begin:std.Thread.Condition = std.Thread.Condition{};
-var done:std.Thread.Condition = std.Thread.Condition{};
-var working:usize = 1;
-var displaying:usize = 1;
-var checking:bool = false;
-var go:bool = true;
+//var checkLen=[_]usize{undefined} ** Threads;                      
+var cellsLen=[_]u32{undefined} ** Threads;                     // array to record iCells values when exiting threads
+var work:std.Thread.Mutex = std.Thread.Mutex{};                // start processing mutex
+var disp_work:std.Thread.Mutex = std.Thread.Mutex{};           // start display mutex
+var fini:std.Thread.Mutex = std.Thread.Mutex{};                // prevent a thread from finishing before we see its working/displaying
+var begin:std.Thread.Condition = std.Thread.Condition{};       // avoid busy waits when staring work
+var done:std.Thread.Condition = std.Thread.Condition{};        // avoid busy waits when waiting for work to finish
+var working:u32 = 1;                                           // active processing threads
+var displaying:u32 = 1;                                        // active display threads
+var checking:bool = false;                                     // controls what processing is done
+var going:bool = true;                                            // false when quitting
 
 //qthreadlocal var iCheck:usize = undefined;                   // Index into the check and cell subarrays
-threadlocal var iCells:usize = undefined;
+threadlocal var iCells:u32 = undefined;
 
-var cellsMax:usize = 0;                                        // largest length of the cellLen subarrays
+var cellsMax:u32 = 0;                                         // largest length of the cellLen subarrays
 //var checkMax:usize = 0;
 
-pub fn worker(t:usize) void {
+pub fn worker(t:u32) void {
     
     var trigger:*std.Thread.Mutex = undefined;                 // choose mutex to trigger 
-    var counter:*usize = undefined;                            // and counter to use
+    var counter:*u32 = undefined;                              // and counter to use
     if (t==0) {                                                
         trigger = &disp_work;                                  // there are other, more generalized, ways to set this up
         counter = &displaying;                                 // here I went for the easiest
@@ -403,15 +404,15 @@ pub fn worker(t:usize) void {
         counter = &working;                                    
     }                                                          
                                                                
-    while (go) {                                             
+    while (going) {                                             
         {                                                      
             
             const w = trigger.acquire();                       // block waiting for work
-            _ = @atomicRmw(usize, counter, .Add, 1, .AcqRel);  // we are now working
+            _ = @atomicRmw(u32, counter, .Add, 1, .AcqRel);  // we are now working
             w.release();
             begin.signal();                                    // tell main to check counter
         } 
-        if (go) {
+        if (going) {
             if (t==0)                                              // depending on the thread & checking, do the work
                 display.push(screen) catch {}                      
             else if (checking)                                     
@@ -421,21 +422,21 @@ pub fn worker(t:usize) void {
         }
         {                                                      
             const f = fini.acquire();                          // work is now finished
-            _ = @atomicRmw(usize, counter, .Sub, 1, .AcqRel);  // no longer working
+            _ = @atomicRmw(u32, counter, .Sub, 1, .AcqRel);  // no longer working
             f.release(); 
             done.signal();                                     // tell main to check counter
         }
     }
 }
 
-pub fn processAlive(t:usize) void {
+pub fn processAlive(t:u32) void {
     
     var list = &alive[t];                   // extacting x and y and using them does not add more speed here
     
     // iCheck = t;                          
     iCells = t;                             // threadlocal vars, we trade memory for thread safey and speed
                                             // and treat the arrayList as dynamic arrays
-    var i:usize = 0;
+    var i:u32 = 0;
 
     while (i < list.items.len) {            // add cells to the hash to enable next generation calculation
         
@@ -470,39 +471,55 @@ pub fn processAlive(t:usize) void {
     cellsLen[t] = iCells;  
 }
     
-pub fn processCells(t:usize) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
+pub fn processCells(t:u32) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
 
     var _ix:i32 = 0;    // use local copies so tracking works (the updates can race and when it happens to often tracking fails)
     var _iy:i32 = 0;
     var _dx:i32 = 0;
     var _dy:i32 = 0;
     
-    var k:usize = 0;                                       // loop thru cells arraylist
+    var k:u32 = 0;                                         // loop thru cells arraylist
     while (k < Threads) : (k+=1) {
-        var i:usize = k + Threads*t;
+        var i:u32 = k + Threads*t;
         while (i < cellsLen[k]) : (i+=Threads*Threads) {   // scan all cells in a thread safe way that balances the alive[] lists
             const c = cells.items[i];
             //const v = c.v;
             if (c.v < 10) {
-                if (c.v == 3) {                                // birth so add to alive list & flag tile(s) as active
+                if (c.v == 3) {                                         // birth so add to alive list & flag tile(s) as active
                     alive[t].appendAssumeCapacity(c.p);
                     newgrid.setActive(c.p);
-                    if (c.p.x > cbx) _ix += 1 else _dx += 1;   // info for auto tracking of activity (births)
-                    if (c.p.y > cby) _iy += 1 else _dy += 1;
-                    b += 1;                                    // can race, not critical 
+                    if (c.p.x > cbx) {                                  // info for auto tracking of activity (births)
+                        _ix += @intCast(i32,@clz(u32,c.p.x-cbx));
+                    } else if (c.p.x < cbx) {
+                        _dx += @intCast(i32,@clz(u32,cbx-c.p.x)); 
+                    }
+                    if (c.p.y > cby) { 
+                        _iy += @intCast(i32,@clz(u32,c.p.y-cby));
+                    } else if (c.p.y < cby) { 
+                        _dy += @intCast(i32,@clz(u32,cby-c.p.y)); 
+                    } 
+                    b += 1;                                             // can race, not critical 
                 } 
-            } else 
-                if (c.v == 12 or c.v == 13)                    // active cell that survivest
+            } else
+                if (c.v == 12 or c.v == 13)                             // active cell that survives
                     alive[t].appendAssumeCapacity(c.p)
                 else {
                     newgrid.setActive(c.p);
-                    if (c.p.x > cbx) _ix -= 1 else _dx -= 1;    // info for auto tracking of activity (deaths)
-                    if (c.p.y > cby) _iy -= 1 else _dy -= 1;
-                    d += 1;                                     // can race, not critical 
+                    if (c.p.x > cbx) {                                  // info for auto tracking of activity (deaths)
+                        _ix -= @intCast(i32,@clz(u32,c.p.x-cbx));
+                    } else if (c.p.x < cbx) {
+                        _dx -= @intCast(i32,@clz(u32,cbx-c.p.x)); 
+                    }
+                    if (c.p.y > cby) { 
+                        _iy -= @intCast(i32,@clz(u32,c.p.y-cby));
+                    } else if (c.p.y < cby) { 
+                        _dy -= @intCast(i32,@clz(u32,cby-c.p.y)); 
+                    } 
+                    d += 1;                                             // can race, not critical 
                 }
         }
     } 
-    ix[zg] += _ix;                                         // if this races once in a blue moon its okay
+    ix[zg] += _ix;              // if this races once in a blue moon its okay
     iy[zg] += _iy;
     dx[zg] += _dx;
     dy[zg] += _dy;
@@ -517,7 +534,7 @@ pub fn ReturnOf(comptime func: anytype) type {
 
 pub fn main() !void {
     
-    var t:usize = 0;                        // used for iterating up to Threads
+    var t:u32 = 0;                          // used for iterating up to Threads
     
     while (t<Threads) : ( t+=1 ) {
         alive[t] = std.ArrayList(Point).init(allocator);
@@ -547,7 +564,7 @@ pub fn main() !void {
     defer screen.deinit();
 
 // rle pattern decoding
-    var pop:usize = 0;
+    var pop:u32 = 0;
     var X:u32 = origin;
     var Y:u32 = origin;
     var count:u32 = 0;
@@ -578,14 +595,14 @@ pub fn main() !void {
 // generation, births & deaths
     var gen: u32 = 0;
     var s:u32 = 0;          // update display even 2^s generations
-    var static:usize = 0;   // cells that do not change from gen to gen
+    var static:u32 = 0;     // cells that do not change from gen to gen
     
-    var inc:usize = 20;                                 // max ammount to move the display window at a time
+    var inc:u32 = 20;                                   // max ammount to move the display window at a time
 
 // set initial display window
 
-    cbx = origin-cols/4;                                       // starting center of activity 
-    cby = origin-rows/4;
+    cbx = (xh-origin)/2+origin;                         // starting center of activity 
+    cby = (yh-origin)/2+origin;
     cbx_ = cbx;                                         // and the alternate
     cby_ = cby;
 
@@ -618,9 +635,9 @@ pub fn main() !void {
     
     var ogen:u32 = 0;                                   // info for rate calculations
     var rtime:i64 = std.time.milliTimestamp()+1_000;  
-    var rate:usize = 0;
-    var limit:usize = 65536;                            // optimistic rate limit
-    var delay:usize = 0;
+    var rate:u32 = 0;
+    var limit:u32 = 65536;                             // optimistic rate limit
+    var delay:u32 = 0;
            
     var dw = disp_work.acquire();                       // block display update thread
     var w = work.acquire();                             // block processing/check update theads
@@ -637,20 +654,21 @@ pub fn main() !void {
 
     while (try display.nextEvent()) |e| {
         
-        var i:usize = 0;
+        var i:u32 = 0;
         
         // process user input
         switch (e) {
-            .up     => { cby += 2*inc; if (tg>0) tg = -tg; },       // manually position the display window
-            .down   => { cby -= 2*inc; if (tg>0) tg = -tg; },
-            .left   => { cbx += 2*inc; if (tg>0) tg = -tg; },
-            .right  => { cbx -= 2*inc; if (tg>0) tg = -tg; },
-            .escape => { go=false; dw.release(); w.release();                                       // quit
-                         while (@atomicLoad(usize,&displaying,.Acquire)>1) { done.wait(&fini); } 
+            .up     => { cby += 2*inc; zn=gen; if (tg>0) tg = -tg; },       // manually position the display window
+            .down   => { cby -= 2*inc; zn=gen; if (tg>0) tg = -tg; },
+            .left   => { cbx += 2*inc; zn=gen; if (tg>0) tg = -tg; },
+            .right  => { cbx -= 2*inc; zn=gen; if (tg>0) tg = -tg; },
+            .escape => { going=false; dw.release(); w.release();                                       // quit
+                         while (@atomicLoad(u32,&displaying,.Acquire)>1) { done.wait(&fini); } 
                          return; 
                        },                       
              .other => |data| {   const eql = std.mem.eql;
                                   if (eql(u8,"t",data)) {
+                                      zn=gen;
                                       if (tg>0) { 
                                           tg = @rem(tg,Track)+1;    // 2, 3 & 4 are the most interesting for tracking
                                       } else 
@@ -663,11 +681,12 @@ pub fn main() !void {
                                   if (eql(u8,"w",data)) { const t1=cbx; cbx=cbx_; cbx_=t1; 
                                                           const t2=cby; cby=cby_; cby_=t2; 
                                                           const t3=tg;  tg=tg_;   tg_=t3;
+                                                          zn = gen;
                                                         } 
                                   if (eql(u8,"+",data)) s += 1;                                                          // update every 2^s generation
                                   if (eql(u8,"-",data)) s = if (s>0) s-1 else s;
-                                  if (eql(u8,"q",data)) { go=false; dw.release(); w.release();                                       // quit
-                                                          while (@atomicLoad(usize,&displaying,.Acquire)>1) { done.wait(&fini); } 
+                                  if (eql(u8,"q",data)) { going=false; dw.release(); w.release();                                       // quit
+                                                          while (@atomicLoad(u32,&displaying,.Acquire)>1) { done.wait(&fini); } 
                                                           return; 
                                                         }     
                              },
@@ -686,7 +705,7 @@ pub fn main() !void {
         
         try cells.ensureCapacity((pop-static)*(8+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
         try cells.resize(cells.capacity-1);                  // arrayList length to max
-        cellsMax = cells.capacity;
+        cellsMax = @intCast(u32,cells.capacity);
         
         //try check.ensureCapacity(std.math.max((b+d)*9*Threads,5*checkMax/4));    // resize the list of cells that might change state
         //try check.resize(check.capacity-1);
@@ -696,7 +715,7 @@ pub fn main() !void {
         if (gen%std.math.shl(u32,1,s)==0) {
             //const tmp:i128 = std.time.nanoTimestamp();
             f = fini.acquire();
-            while (@atomicLoad(usize,&displaying,.Acquire)>1) {    // wait for display worker thread, usually its done before we get here
+            while (@atomicLoad(u32,&displaying,.Acquire)>1) {    // wait for display worker thread, usually its done before we get here
                 done.wait(&fini);
             }
             f.release();
@@ -723,7 +742,7 @@ pub fn main() !void {
         pop = 0;                                            // sum to get the population
         t = 0;                                          
         while (t<Threads) : ( t+=1 ) {
-            pop += alive[t].items.len+1;
+            pop += @intCast(u32,alive[t].items.len)+1;
         }
         
         // nnn += 1;
@@ -733,7 +752,7 @@ pub fn main() !void {
         
         if (Threads > 1) {
             f = fini.acquire();                                        // block completions so a quickly finishing thread is seen
-            while (@atomicLoad(usize,&working,.Acquire)<Threads) {     // wait for all worker threads to wake each other
+            while (@atomicLoad(u32,&working,.Acquire)<Threads) {     // wait for all worker threads to wake each other
                 begin.wait(&work);                                     // release work mutex and wait for worker to signal 
             }
             f.release();                                               // allow completions
@@ -743,7 +762,7 @@ pub fn main() !void {
         
         if (Threads > 1) {
             f = fini.acquire();
-            while (@atomicLoad(usize,&working,.Acquire)>1) {           // wait for all worker threads to finish
+            while (@atomicLoad(u32,&working,.Acquire)>1) {           // wait for all worker threads to finish
                 done.wait(&fini);
             }
             f.release();
@@ -756,7 +775,7 @@ pub fn main() !void {
         // gather stats needed for display and sizing cells, check and alive[] arrayLists
         t = 0;                                          
         while (t<Threads) : ( t+=1 ) {  
-            static += alive[t].items.len;
+            static += @intCast(u32,alive[t].items.len);
             //checkMax = std.math.max(checkMax,checkLen[t]);
             cellsMax = std.math.max(cellsMax,cellsLen[t]);
         } 
@@ -783,9 +802,9 @@ pub fn main() !void {
         
         // doing the screen update, display.push(screen); in another thread alows overlap and yields faster rates. 
         
-        if ((gen+1)%std.math.shl(u32,1,s)==0 and gen>0) {           // update display every 2^s generations
+        if ((gen+1)%std.math.shl(u32,1,s)==0) {                     // update display every 2^s generations
             f=fini.acquire();
-            while (@atomicLoad(usize,&displaying,.Acquire)<2) {     // wait for worker thread
+            while (@atomicLoad(u32,&displaying,.Acquire)<2) {     // wait for worker thread
                 begin.wait(&disp_work);                             // release disp_work mutex and wait for worker to signal
             }
             f.release();
@@ -813,10 +832,10 @@ pub fn main() !void {
 
         if (cellsMax > cellsThreading and Threads>1) {                   
             
-            checking = true;                                            // enabling threading here costs cpu only help for very large checkMax  
+            checking = true;                                            // tell worker to use processCells  
             
             f = fini.acquire();
-            while (@atomicLoad(usize,&working,.Acquire)<Threads) {      // wait for all worker threads to wake each other
+            while (@atomicLoad(u32,&working,.Acquire)<Threads) {        // wait for all worker threads to wake each other
                 begin.wait(&work);                                      // release work mutex and wait for worker to signal
             }
             f.release();                                                // let threads record completions
@@ -824,7 +843,7 @@ pub fn main() !void {
             processCells(0);                                            // use this thread too
             
             f = fini.acquire();
-            while (@atomicLoad(usize,&working,.Acquire)>1) {            // wait for all worker threads to finish
+            while (@atomicLoad(u32,&working,.Acquire)>1) {            // wait for all worker threads to finish
                 done.wait(&fini);
             }
             f.release();
@@ -835,29 +854,31 @@ pub fn main() !void {
         }            
                                        
         // higher rates yield smaller increments 
-        inc = std.math.max(16-std.math.log2(rate+1),1);
+        inc = std.math.max(@clz(@TypeOf(rate),rate+1)-16,1);            // increase increment as we slow down
         
-        // if there are enough |births-deaths| left or right of cbx adjust to eventually move the display window.
+        // adjust cbx for an eventually move of the display window.
         if (tg>0) {
-            const aa = sum(ix,tg);
-            const bb = sum(dx,tg);
-            if (std.math.absCast(aa-bb) > inc) {
-                if (aa > bb) cbx += inc else cbx -= inc;
-            }
+            if (sum(ix,tg) >  sum(dx,tg)) cbx += inc else cbx -= inc;
+            //const aa = sum(ix,tg);
+            //const bb = sum(dx,tg);
+            //if (std.math.absCast(aa-bb) > inc) {
+            //    if (aa > bb) cbx += inc else cbx -= inc;
+            //}
         }
             
-        // if there are enough |births-deaths| above or below of cby adjust to eventually move the display window
+        // adjust cby for an eventually move of the display window.
         if (tg>0) {
-            const aa = sum(iy,tg);
-            const bb = sum(dy,tg);
-            if (std.math.absCast(aa-bb) > inc) {
-                if (aa > bb) cby += inc else cby -= inc;
-            }
+            if (sum(iy,tg) >  sum(dy,tg)) cby += inc else cby -= inc;
+            //const aa = sum(iy,tg);
+            //const bb = sum(dy,tg);
+            //if (std.math.absCast(aa-bb) > inc) { 
+            //    if (aa > bb) cby += inc else cby -= inc;
+            //}
         }
         
         // keep a history so short cycle patterns with non symetric birth & deaths will be ignored for tracking
-        if (tg!=0) 
-            zg = (zg+1)%std.math.absCast(tg);
+        if (tg!=0)
+            zg = gen%std.math.absCast(tg);
         
         // clear counters for tracking info in the next generation
         dx[zg] = 0;
@@ -866,7 +887,7 @@ pub fn main() !void {
         iy[zg] = 0;
             
         // switch focus of "center of activity" is moving off display window
-        if (tg>0 and zg==0) {
+        if (tg>0 and gen>=zn) {
             if (std.math.absCast(xl +% cols/2 -% cbx) > 4*cols/5)  {
                 xl = cbx - cols/2;                       
                 xh = xl + cols - 1;
@@ -875,6 +896,7 @@ pub fn main() !void {
                 yl = cby - rows/2;
                 yh = yl + rows - 2;     // allow for the title line
             }
+            zn = gen+rate/std.math.clamp(30-@clz(@TypeOf(rate),rate+1),1,10);    // 1/10 second above 8192/s down to 1s at 8/s
         }
         
     }
