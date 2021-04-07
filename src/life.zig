@@ -71,19 +71,22 @@ const build_options = @import("build_options");
 // help since scanning less is good.  However because we spend most of our time in processAlive in addCell and addNear the overhead 
 // to track these cells actually ends up costing us 2-5%.  I added this optimization before the addition of the static cell logic.
 // which reduces the number of cells to process by about 70-90%, that changed the balance so the checkList was no longer helping.
+//
+// What AtomicOrder is required?  I was pointed at: https://en.cppreference.com/w/c/atomic/memory_order
+// which I've found to be a very good guide.  Using this it seems that for what we do here .Release will suffice as quoted below:
+//
+// Release sequence
+// If some atomic is store-released and several other threads perform read-modify-write operations on that atomic, a 
+// "release sequence" is formed: all threads that perform the read-modify-writes to the same atomic synchronize with the first thread
+// and each other even if they have no memory_order_release semantics. This makes single producer - multiple consumers situations 
+// possible without imposing unnecessary synchronization between individual consumer threads.
+//
+// set the pattern to run in ../build.zig
 
-// set the pattern to run below
+const pattern = build_options.pattern;      // get setting from build.zig
+const Threads = build_options.Threads;      // Threads to use from build.zig
 
-const pattern = build_options.pattern;
-
-//const pattern = p_pony_express;
-//const pattern = p_95_206_595m;
-//const pattern = p_1_700_000m;    // my current favorite pattern, use cursor keys and watch at -n,-n where n<1400 or so. 
-//const pattern = p_max;
-//const pattern = p_52513m;
-
-const Threads = build_options.Threads;                 //Threads to use for next generation calculation (85-95% cpu/thread).  Plus a Display update thread (5-10% cpu).
-const cellsThreading = 1_000;      // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops, now a net gain.
+const cellsThreading = 1_000;               // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops. 
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
 //
