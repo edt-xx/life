@@ -4,7 +4,13 @@ This program is an implementation of life as create by John H. Conway.
 
 change the pattern to one of the included patterns and rebuild, 
 
-zig build-exe -lpthread -O ReleaseFast --pkg-begin zbox ../zbox/src/box.zig --pkg-end life.zig
+set the directory use for zbox in build.zig
+
+update the pattern to animated and the number of threads to use in build.zig
+
+zig build -Drelease-fast run
+or
+zig build -Drelease-safe run (about 10% slower)
 
 zbox can be cloned from: https://github.com/jessrud/zbox.git
 
