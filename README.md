@@ -25,18 +25,20 @@ window(2) tells us autotracking is enabled ( t ) and it is using 2 generations f
 window(-2) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking.
 The last two numbers are the window position.
 
-    s, f        : limits the generation rate, s halves the rate and f doubles it (when limited you will see rate>xxx/s )
-                  period and commas are aliases for s & f (s=, and f=.)
+    s, f    : limits the generation rate, s halves the rate and f doubles it (when limited you will see rate>xxx/s )
+              period and commas are aliases for s & f (s=, and f=.)
 
-    +, -        : only show every nth generation.  + doubles n, - halves n (generation xxxx(n) ...)
+    +, -    : only show every nth generation.  + doubles n, - halves n (generation xxxx(n) ...)
 
-    cursor keys : allow manual positioning of the window using cursor keys (window(-autotracking generations) ...)
+    cursor  : allow manual positioning of the window using cursor keys (window(-autotracking) ...)
+    keys
 
-    t           : if manual tracking is enabled, disable it, if disabled toggle the number of generations used for autotracking
+    t       : if manual tracking is enabled, disable it (window(autotracking)...), if disabled, cycle t thru 1..6, decreasing 
+              the area evaluated for active cells.
     
-    w           : toggle window postion and tracking.  Patterns often have two interesting area, this lets you toggle between them.
+    w       : toggle window postion and tracking.  Patterns often have two interesting area, this lets you toggle between them.
 
-    esc, q      : will exit the program
+    esc, q  : will exit the program
 
 The algorithm used here was developed in the late 70s or early 80s.  I first implemented it on an OSI superboard II using 
 Basic and 6502 assembly.  This was before algorithms like hash life were discovered.  I've been using it when I want to learn a 
@@ -54,7 +56,7 @@ in the area.  Any cells in a static area survive into the next generation.  We s
 in ajoining non static areas.  The effect of all this is to drasticly limit the number of cells we need to work with.  Once we finsh 
 processing the alive arraylist (processAlive), we start a thread to update the display and others to process the cells list 
 (processCells) to update the alive[] lists for the next generation.  To make being thread safe easier we keep alive[Threads] lists
-of alive points.  ProcessCells in designed to be thread safe, and just as important, it balances the alive lists and updates the 
+of alive points.  ProcessCells is designed to be thread safe, and just as important, it balances the alive lists and updates the 
 static 4x4 area flags when we find a birth or death.  It also gathers data to allow autotracking of activity. 
 
 The way the cells are added in AddCell and AddNear is interesting.  At the start of the process we record the cells head of list.

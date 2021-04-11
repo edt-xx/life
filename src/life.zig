@@ -35,7 +35,8 @@ const build_options = @import("build_options");
 //
 // cursor keys : allow manual positioning of the window using cursor keys (window(-autotracking generations) ...)
 //
-// t           : if manual tracking is enabled, disable it, if disabled toggle the number of generations used for autotracking
+// t           : if manual tracking enabled, disable, if disabled, cycle t thru 1..6, decreasing the area evaluated for active cells. 
+//               window is 1024k (t=1) to 32k (t=6).
 //
 // w           : toggle window position and tracking.  Often patterns have two interesting areas.  This allows switching between them.
 //
@@ -323,11 +324,11 @@ const Hash = struct {
     
 };
 
-fn sum(bmd:[Track]i32, t:isize) i32 {                        // tool used by autotracking (bmd = births - deaths)
-  var i:u32 = 0; var s:i32 = 0;
-  while (i < t) : (i += 1) s += std.math.absInt(bmd[i]) catch unreachable;
-  return s;
-}
+//fn sum(bmd:[Track]i32, t:isize) i32 {                        // tool used by autotracking (bmd = births - deaths)
+//  var i:u32 = 0; var s:i32 = 0;
+//  while (i < t) : (i += 1) s += std.math.absInt(bmd[i]) catch unreachable;
+//  return s;
+//}
 
 var screen:display.Buffer = undefined;
 
@@ -345,14 +346,14 @@ var yh:u32 = 0;
              
 const Track = 6;
 
-var dx = [_]i32{0} ** Track;                                // used to track activity for autotracking
-var ix = [_]i32{0} ** Track;
-var dy = [_]i32{0} ** Track;
-var iy = [_]i32{0} ** Track;
+var dx:i32 = 0;                                             // used to track activity for autotracking
+var ix:i32 = 0;
+var dy:i32 = 0;
+var iy:i32 = 0;
 
 var tg:isize = 1;                                           // number of generations used for autotracking, if negitive autotracking is disabled
 var tg_:isize = 1;                                          // alternate toggle
-var zg:usize = 0;                                           // index for history
+//var zg:usize = 0;                                           // index for history
 var zn:usize = 0;                                           // generation of next display window switch
 
 var b:u32 = 0;                                              // births and deaths
@@ -414,7 +415,7 @@ pub fn worker(t:u32) void {
         {                                                      
             
             const w = trigger.acquire();                       // block waiting for work
-            _ = @atomicRmw(u32, counter, .Add, 1, .AcqRel);  // we are now working
+            _ = @atomicRmw(u32, counter, .Add, 1, .AcqRel);    // we are now working
             w.release();
             begin.signal();                                    // tell main to check counter
         } 
@@ -428,7 +429,7 @@ pub fn worker(t:u32) void {
         }
         {                                                      
             const f = fini.acquire();                          // work is now finished
-            _ = @atomicRmw(u32, counter, .Sub, 1, .AcqRel);  // no longer working
+            _ = @atomicRmw(u32, counter, .Sub, 1, .AcqRel);    // no longer working
             f.release(); 
             done.signal();                                     // tell main to check counter
         }
@@ -457,7 +458,7 @@ pub fn processAlive(t:u32) void {
 
         // add effect of the cell on the surrounding area, if not in a static area
         
-        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);   // going static check before addNear call saves ~2%
+        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);   // doing static check before addNear call saves ~2%
                     p.y +%= 1;  if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
         p.x -%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
         p.x -%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
@@ -484,6 +485,12 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
     var _dx:i32 = 0;
     var _dy:i32 = 0;
     
+    var sub:u32 = 0;
+    if (tg>0)
+        sub = @intCast(u32,11+tg)
+    else
+        sub = @intCast(u32,11-tg);
+    
     var k:u32 = 0;                                         // loop thru cells arraylist
     while (k < Threads) : (k+=1) {
         var i:u32 = k + Threads*t;
@@ -495,40 +502,40 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
                     alive[t].appendAssumeCapacity(c.p);
                     newgrid.setActive(c.p);
                     if (c.p.x > cbx) {                                  // info for auto tracking of activity (births)
-                        _ix += @intCast(i32,@clz(u32,c.p.x-cbx));
+                        _ix +=  @intCast(i32,std.math.max(@clz(u32,c.p.x-cbx)-sub,0));
                     } else if (c.p.x < cbx) {
-                        _dx += @intCast(i32,@clz(u32,cbx-c.p.x)); 
+                        _dx +=  @intCast(i32,std.math.max(@clz(u32,cbx-c.p.x)-sub,0)); 
                     }
                     if (c.p.y > cby) { 
-                        _iy += @intCast(i32,@clz(u32,c.p.y-cby));
+                        _iy +=  @intCast(i32,std.math.max(@clz(u32,c.p.y-cby)-sub,0));
                     } else if (c.p.y < cby) { 
-                        _dy += @intCast(i32,@clz(u32,cby-c.p.y)); 
+                        _dy +=  @intCast(i32,std.math.max(@clz(u32,cby-c.p.y)-sub,0)); 
                     } 
                     b += 1;                                             // can race, not critical 
-                } 
+                }
             } else
                 if (c.v == 12 or c.v == 13)                             // active cell that survives
                     alive[t].appendAssumeCapacity(c.p)
                 else {
                     newgrid.setActive(c.p);
                     if (c.p.x > cbx) {                                  // info for auto tracking of activity (deaths)
-                        _ix -= @intCast(i32,@clz(u32,c.p.x-cbx));
+                        _ix -=  @intCast(i32,std.math.max(@clz(u32,c.p.x-cbx)-sub,0));
                     } else if (c.p.x < cbx) {
-                        _dx -= @intCast(i32,@clz(u32,cbx-c.p.x)); 
+                        _dx -=  @intCast(i32,std.math.max(@clz(u32,cbx-c.p.x)-sub,0)); 
                     }
                     if (c.p.y > cby) { 
-                        _iy -= @intCast(i32,@clz(u32,c.p.y-cby));
+                        _iy -=  @intCast(i32,std.math.max(@clz(u32,c.p.y-cby)-sub,0));
                     } else if (c.p.y < cby) { 
-                        _dy -= @intCast(i32,@clz(u32,cby-c.p.y)); 
+                        _dy -=  @intCast(i32,std.math.max(@clz(u32,cby-c.p.y)-sub,0)); 
                     } 
                     d += 1;                                             // can race, not critical 
                 }
         }
-    } 
-    ix[zg] += _ix;              // if this races once in a blue moon its okay
-    iy[zg] += _iy;
-    dx[zg] += _dx;
-    dy[zg] += _dy;
+    }
+    ix += _ix;           // if this races once in a blue moon its okay
+    iy += _iy;
+    dx += _dx;
+    dy += _dy;
 }
 
 pub fn ReturnOf(comptime func: anytype) type {
@@ -664,11 +671,11 @@ pub fn main() !void {
         
         // process user input
         switch (e) {
-            .up     => { cby += 2*inc; zn=gen; if (tg>0) tg = -tg; },       // manually position the display window
-            .down   => { cby -= 2*inc; zn=gen; if (tg>0) tg = -tg; },
-            .left   => { cbx += 2*inc; zn=gen; if (tg>0) tg = -tg; },
-            .right  => { cbx -= 2*inc; zn=gen; if (tg>0) tg = -tg; },
-            .escape => { going=false; dw.release(); w.release();                                       // quit
+            .up     => { cby += inc; zn=gen; if (tg>0) tg = -tg; },  // manually position the display window
+            .down   => { cby -= inc; zn=gen; if (tg>0) tg = -tg; },
+            .left   => { cbx += inc; zn=gen; if (tg>0) tg = -tg; },
+            .right  => { cbx -= inc; zn=gen; if (tg>0) tg = -tg; },
+            .escape => { going=false; dw.release(); w.release();                                 // quit
                          while (@atomicLoad(u32,&displaying,.Acquire)>1) { done.wait(&fini); } 
                          return; 
                        },                       
@@ -679,8 +686,8 @@ pub fn main() !void {
                                           tg = @rem(tg,Track)+1;    // 2, 3 & 4 are the most interesting for tracking
                                       } else 
                                           tg = -tg; 
-                                      if (zg >= tg) 
-                                          zg = 0; 
+                                      //if (zg >= tg) 
+                                      //    zg = 0; 
                                   } 
                                   if (eql(u8,"s",data) or eql(u8,",",data)) limit = if (limit>1) limit/2 else limit;     // limit generation rate
                                   if (eql(u8,"f",data) or eql(u8,".",data)) limit = if (limit<16384) limit*2 else limit;
@@ -691,7 +698,7 @@ pub fn main() !void {
                                                         } 
                                   if (eql(u8,"+",data)) s += 1;                                                          // update every 2^s generation
                                   if (eql(u8,"-",data)) s = if (s>0) s-1 else s;
-                                  if (eql(u8,"q",data)) { going=false; dw.release(); w.release();                                       // quit
+                                  if (eql(u8,"q",data)) { going=false; dw.release(); w.release();                                 // quit
                                                           while (@atomicLoad(u32,&displaying,.Acquire)>1) { done.wait(&fini); } 
                                                           return; 
                                                         }     
@@ -707,7 +714,7 @@ pub fn main() !void {
             yh = yl + rows - 2;
         }
         
-        try grid.assign(newgrid);                       // assign newgrid to grid (if order changes reallocate hash storage)
+        try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
         try cells.ensureCapacity((pop-static)*(8+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
         try cells.resize(cells.capacity-1);                  // arrayList length to max
@@ -863,34 +870,39 @@ pub fn main() !void {
         inc = std.math.max(@clz(@TypeOf(rate),rate+1)-16,1);            // increase increment as we slow down
         
         // adjust cbx for an eventually move of the display window.
+        
         if (tg>0) {
-            if (sum(ix,tg) >  sum(dx,tg)) cbx += inc else cbx -= inc;
-            //const aa = sum(ix,tg);
-            //const bb = sum(dx,tg);
-            //if (std.math.absCast(aa-bb) > inc) {
-            //    if (aa > bb) cbx += inc else cbx -= inc;
-            //}
+            dx = @intCast(i32,std.math.absCast(dx));
+            ix = @intCast(i32,std.math.absCast(ix));
+            if (std.math.absCast(ix-dx) >= inc) {                   
+                if (ix > dx) 
+                    cbx += inc
+                else if (ix < dx) 
+                    cbx -= inc;
+            }
         }
             
         // adjust cby for an eventually move of the display window.
         if (tg>0) {
-            if (sum(iy,tg) >  sum(dy,tg)) cby += inc else cby -= inc;
-            //const aa = sum(iy,tg);
-            //const bb = sum(dy,tg);
-            //if (std.math.absCast(aa-bb) > inc) { 
-            //    if (aa > bb) cby += inc else cby -= inc;
-            //}
+            dy = @intCast(i32,std.math.absCast(dy));
+            iy = @intCast(i32,std.math.absCast(iy));
+            if (std.math.absCast(iy-dy) >= inc) {
+                if (iy > dy) 
+                    cby += inc
+                else if (iy < dy) 
+                    cby -= inc;
+            }            
         }
         
         // keep a history so short cycle patterns with non symetric birth & deaths will be ignored for tracking
-        if (tg!=0)
-            zg = gen%std.math.absCast(tg);
+        // if (tg!=0)
+        //    zg = gen%std.math.absCast(tg);
         
         // clear counters for tracking info in the next generation
-        dx[zg] = 0;
-        ix[zg] = 0;
-        dy[zg] = 0;
-        iy[zg] = 0;
+        dx = 0;
+        ix = 0;
+        dy = 0;
+        iy = 0;
             
         // switch focus of "center of activity" is moving off display window
         if (tg>0 and gen>=zn) {
