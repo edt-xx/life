@@ -84,8 +84,9 @@ const build_options = @import("build_options");
 //
 // set the pattern to run in ../build.zig
 
-const pattern = build_options.pattern;      // get setting from build.zig
-const Threads = build_options.Threads;      // Threads to use from build.zig
+const pattern = build_options.pattern;          // get setting from build.zig
+const Threads = build_options.Threads;          // Threads to use from build.zig
+const staticSize = build_options.staticSize;    // active consists of staticSize x staticSize tiles.  Must be a power of 2.
 
 const cellsThreading = 1_000;               // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops. 
 
@@ -131,7 +132,7 @@ const Cell = struct {
 };
 
 var theSize:usize = 0;
-
+                 
 const Hash = struct {
     hash:[]?*Cell,              // pointers into the cells arraylist (2^order x 2^order hash table)
     static: []bool,             // flag if 4x4 area is static
@@ -148,7 +149,8 @@ const Hash = struct {
         if (size < theSize/2 or size > theSize)         // reduce order bouncing and (re)allocates
             theSize = size;
         
-        const o = @intCast(u5,std.math.clamp(std.math.log2(theSize)/2+1, 6, 12));
+        // const o = @intCast(u5,std.math.clamp(std.math.log2(theSize)/2+1, 6, 12));
+        const o = @intCast(u5,std.math.clamp(31-@clz(@TypeOf(theSize),theSize)/2+1, 6, 12));
         
         return Hash{ .hash=undefined, 
                      .static=undefined,
@@ -162,29 +164,28 @@ const Hash = struct {
             self.order = s.order;
             self.shift = s.shift;
             allocator.free(self.hash);
-            self.hash = try allocator.alloc(?*Cell,std.math.shl(usize,1,2*self.order));
+            self.hash = try allocator.alloc(?*Cell,@as(u32,1)<<2*self.order);
         }
         // clear the hash table pointers
         
         // from valgrind, only @memset is using the os memset call
         // for (self.hash) |*c| c.* = null;                
         // std.mem.set(?*Cell,self.hash,null);
-        @memset(@ptrCast([*]u8,self.hash),0,@sizeOf(?*Cell)*std.math.shl(usize,1,2*self.order));
+        @memset(@ptrCast([*]u8,self.hash),0,@sizeOf(?*Cell)*@as(u32,1)<<2*self.order);
         self.static = s.static;
     }
     
-    fn takeStatic(self:*Hash,s:*Hash) !void {          
+    fn takeStatic(self:*Hash,s:*Hash) !void { 
         if (self.order != s.order) {
-            allocator.free(s.static);
-            s.static = try allocator.alloc(bool,std.math.shl(usize,1,2*self.order));
-        } 
+            allocator.free(s.static);            
+            s.static = try allocator.alloc(bool,@as(u32,1)<<2*self.order);                  // this is accessed via hashing so making it
+        }                                                                                   // smaller causes more collision and is slower
         self.static = s.static;
         // mark all tiles as static to start
-        
         // from valgrind, only @memset uses the os memset
         // for (self.static) |*t| t.* = true;           
         // std.mem.set(bool,self.static,true);
-        @memset(@ptrCast([*]u8,self.static),1,@sizeOf(bool)*std.math.shl(usize,1,2*self.order));
+        @memset(@ptrCast([*]u8,self.static),1,@sizeOf(bool)*@as(u32,1)<<2*self.order);
     }
       
     fn deinit(self:Hash) void {
@@ -192,23 +193,26 @@ const Hash = struct {
         allocator.free(self.static);
     }
         
-    fn setActive(self:*Hash,p:Point) callconv(.Inline) void {         // Collisions are ignored here, more tiles will be flagged as active which is okay
-         const t = Point{.x=p.x>>2, .y=p.y>>2};
-         var tx = t.x;
-         var ty = t.y;
-         const x = p.x & 0x03;   // 4x4 tiles are optimal                
-         const y = p.y & 0x03;         
+    fn setActive(self:*Hash,p:Point) callconv(.Inline) void {   // Collisions are ignored here, more tiles will be flagged as active which is okay
          
-         self.static[self.index(tx, ty)] = false;
+         const i = staticSize;                                  // global is not faster
+         const m = staticSize-1;
+        
+         var t = Point{.x=p.x|m, .y=p.y|m};                     // using a const for t and var tx=t.x, ty=t.y is slower
+                                                                // using masks instead of shifting is also faster         
+         const x = p.x & m;                  
+         const y = p.y & m;   // 4x4 tiles are optimal, 2x2 and 8x8 also work but not as well      
+
+         self.static[self.index(t.x, t.y)] = false;
          
-         tx +%= 1;              if (x==3         ) self.static[self.index(tx, ty)] = false;
-                     ty +%= 1;  if (x==3 and y==3) self.static[self.index(tx, ty)] = false;
-         tx -%= 1;              if (         y==3) self.static[self.index(tx, ty)] = false;
-         tx -%= 1;              if (x==0 and y==3) self.static[self.index(tx, ty)] = false;
-                     ty -%= 1;  if (x==0         ) self.static[self.index(tx, ty)] = false;
-                     ty -%= 1;  if (x==0 and y==0) self.static[self.index(tx, ty)] = false;
-         tx +%= 1;              if (         y==0) self.static[self.index(tx, ty)] = false;
-         tx +%= 1;              if (x==3 and y==0) self.static[self.index(tx, ty)] = false;
+         if (x==m         ) self.static[self.index(t.x+%i, t.y   )] = false;
+         if (x==m and y==m) self.static[self.index(t.x+%i, t.y+%i)] = false;
+         if (         y==m) self.static[self.index(t.x   , t.y+%i)] = false;
+         if (x==0 and y==m) self.static[self.index(t.x-%i, t.y+%i)] = false;
+         if (x==0         ) self.static[self.index(t.x-%i, t.y   )] = false;
+         if (x==0 and y==0) self.static[self.index(t.x-%i, t.y-%i)] = false;
+         if (         y==0) self.static[self.index(t.x   , t.y-%i)] = false;
+         if (x==m and y==0) self.static[self.index(t.x+%i, t.y-%i)] = false;
    }              
 
 // use the middle bits of the square of the coord to create the index.  No need
@@ -227,21 +231,19 @@ const Hash = struct {
     
     fn addCell(self:*Hash, p:Point) void { 
         
-        const x = p.x;
-        const y = p.y;
+        //const x = p.x;
+        //const y = p.y;
 
-        const h = self.index(x,y);   // zig does not have 2D dynamic arrays so we fake it...
+        const h = self.index(p.x,p.y);      // zig does not have 2D dynamic arrays so we fake it...
         
-        var i:?*Cell = undefined;    // Points to the current Cell or null
-                
-        i = self.hash[h];
-        
+        var i:?*Cell = self.hash[h];        // Points to the current Cell or null
+                       
         while (true) {
             
             const head = i;
             
             while (i) |c| {
-                if (y == c.p.y and x == c.p.x) {
+                if (p.y == c.p.y and p.x == c.p.x) {
                     if (Threads == 1) 
                         c.v += 10
                     else
@@ -277,24 +279,19 @@ const Hash = struct {
  
     fn addNear(self:*Hash, p:Point) void { 
         
-        const x = p.x;
-        const y = p.y;
+        //const x = p.x;                    // no faster using x & y
+        //const y = p.y;
         
-        //if (self.static[self.index(x>>2, y>>2)])
-        //    return;
-
-        const h = self.index(x,y);  // zig does not have 2D dynamic arrays so we fake it...
+        const h = self.index(p.x,p.y);      // zig does not have 2D dynamic arrays so we fake it...
         
-        var i:?*Cell = undefined;    // ***1 Points to the current Cell or null
-        
-        i = self.hash[h];
+        var i:?*Cell = self.hash[h];        // ***1 Points to the current Cell or null
             
         while (true) {
             
             const head = i;
         
             while (i) |c| {
-                if (y == c.p.y and x == c.p.x) {
+                if (p.y == c.p.y and p.x == c.p.x) {
                     if (Threads == 1)
                         c.v += 1
                     else
@@ -330,7 +327,7 @@ const Hash = struct {
 //  return s;
 //}
 
-var screen:display.Buffer = undefined;
+ var screen:display.Buffer = undefined;
 
 const origin:u32 = 1_000_000_000;                           // about 1/4 of max int which is (near) optimal when both index & tile hashes are considered
 
@@ -413,7 +410,6 @@ pub fn worker(t:u32) void {
                                                                
     while (going) {                                             
         {                                                      
-            
             const w = trigger.acquire();                       // block waiting for work
             _ = @atomicRmw(u32, counter, .Add, 1, .AcqRel);    // we are now working
             w.release();
@@ -421,7 +417,7 @@ pub fn worker(t:u32) void {
         } 
         if (going) {
             if (t==0)                                              // depending on the thread & checking, do the work
-                display.push(screen) catch {}                      
+                display.push(screen) catch {} 
             else if (checking)                                     
                 processCells(t)                                    
             else                                                   
@@ -438,6 +434,8 @@ pub fn worker(t:u32) void {
 
 pub fn processAlive(t:u32) void {
     
+    const m = staticSize-1;
+    
     var list = &alive[t];                   // extacting x and y and using them does not add more speed here
     
     // iCheck = t;                          
@@ -449,7 +447,7 @@ pub fn processAlive(t:u32) void {
         
         var p = list.items[i];              // extract the point                                     
         
-        if (grid.static[grid.index(p.x>>2, p.y>>2)])
+        if (grid.static[grid.index(p.x|m, p.y|m)])
             i += 1                                     // keep static cells in alive list - they are stable
         else {
             grid.addCell(p);  
@@ -458,14 +456,14 @@ pub fn processAlive(t:u32) void {
 
         // add effect of the cell on the surrounding area, if not in a static area
         
-        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);   // doing static check before addNear call saves ~2%
-                    p.y +%= 1;  if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
-        p.x -%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
-        p.x -%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
-                    p.y -%= 1;  if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
-                    p.y -%= 1;  if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
-        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
-        p.x +%= 1;              if (!grid.static[grid.index(p.x>>2, p.y>>2)]) grid.addNear(p);
+        p.x +%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);   // doing static check here and
+                    p.y +%= 1;  if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);   // not in addNear call saves ~2%
+        p.x -%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
+        p.x -%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
+                    p.y -%= 1;  if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
+                    p.y -%= 1;  if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
+        p.x +%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
+        p.x +%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
         
         // if cell is within the display window update the screen buffer
         
@@ -618,7 +616,7 @@ pub fn main() !void {
     cby = (yh-origin)/2+origin;
     cbx_ = cbx;                                         // and the alternate
     cby_ = cby;
-
+    
     xl = cbx - cols/2;                                  // starting window
     xh = xl + cols - 1;  
     yl = cby - rows/2; 
@@ -635,6 +633,7 @@ pub fn main() !void {
     grid.order = 0;     // this forces grid.assign & newgrid.takeStatic to reallocate storage for hash and static.
     
     try newgrid.takeStatic(&grid);
+    
     t = 0;
     while (t<Threads) : ( t+=1 ) {
         for (alive[t].items) |p| { newgrid.setActive(p); }   // set all tiles active for the first generation
@@ -665,8 +664,8 @@ pub fn main() !void {
     // var nnn:usize = 0;
     // var ddd:i128 = 0;
 
-    while (try display.nextEvent()) |e| {
-        
+     while (try display.nextEvent()) |e| {
+          
         var i:u32 = 0;
         
         // process user input
@@ -707,12 +706,12 @@ pub fn main() !void {
         }
         
         // switch focus of center of activity as per user
-        if (tg<0) {
-            xl = cbx - cols/2;                       
-            xh = xl + cols - 1;
-            yl = cby - rows/2;
-            yh = yl + rows - 2;
-        }
+         if (tg<0) {
+             xl = cbx - cols/2;                       
+             xh = xl + cols - 1;
+             yl = cby - rows/2;
+             yh = yl + rows - 2;
+         }
         
         try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
@@ -736,17 +735,17 @@ pub fn main() !void {
         }
  
         // update the size of screen buffer
-        size = try display.size();
-        if (size.width != cols or size.height != rows) {
-            try screen.resize(size.height, size.width);
-            cols = @intCast(u32,size.width);
-            rows = @intCast(u32,size.height);
-            xl = cbx - cols/2; 
-            xh = xl + cols - 1;
-            yl = cby - rows/2;              
-            yh = yl + rows - 2;
-        }
-        screen.clear();                                     // clear the internal screen display buffer    
+         size = try display.size();
+         if (size.width != cols or size.height != rows) {
+             try screen.resize(size.height, size.width);
+             cols = @intCast(u32,size.width);
+             rows = @intCast(u32,size.height);
+             xl = cbx - cols/2; 
+             xh = xl + cols - 1;
+             yl = cby - rows/2;              
+             yh = yl + rows - 2;
+         }
+         screen.clear();                                     // clear the internal screen display buffer    
 
 // populate hash & heap from alive list
         

@@ -11,16 +11,19 @@ pub fn build(b: *std.build.Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
     
-    const exe = b.addExecutable("life", "src/life.zig");
+    const exe = b.addExecutable("life", "src/life.zig");    
     
-    exe.addBuildOption(u32,"Threads",3);
-    exe.addBuildOption([]const u8,"pattern",p_1_700_000m);
+    exe.addBuildOption([]const u8,"pattern",p_850_000m);
     
 //  p_95_206_595m       // pattern used in benchmarking (corder ship, non symetric, terminating)
-//  p_19_659_494m        // symetric quasi-crystal coorder ship reaction
-//  p_1_700_000m        // my current favorite pattern, use cursor keys and watch at -n,-n where n<1400 or so. 
+//  p_19_659_494m       // symetric quasi-crystal coorder ship reaction
+//  p_1_700_000m        // my current favorite pattern, use cursor keys and watch at -n,-n where n<1400 or so.
+//  p_850_000m          // at about 450k a glider starts towards the engines, at 650k it destroys them, at 750k ash is penitrated
 //  p_max               // fastest growth possible
 //  p_52513m            // longest running mesuthelah currently known (march 2021)
+    
+    exe.addBuildOption(u32,"Threads",7);                        // threads excluding display update thread
+    exe.addBuildOption(u32,"staticSize",4);                     // size of static tiles, must be a power of 2 (4 is optimal)
     
     exe.addPackagePath("zbox","../zbox/src/box.zig");
     exe.linkSystemLibrary("pthread");
@@ -49,12 +52,22 @@ const p_chaotic1 =
 const p_chaotic2 =
 \\23bo$21b2ob2o$21b2ob2o$21b2o$23b2obo$24bo2bo$24bo2bo$25b2o11$bobo$o$bo2bo$3b3o!
 ;                       
-                        // nonsymetric quasicrystal coorder ship reaction
+ 
+// nonsymetric quasicrystal switch engine reaction
+// by 1300k geneations the switch engines have be stopped, the residual gliders keep the ash active till about 1700k.
 const p_1_700_000m =
 \\7bobo$6bo$7bo2bo$9b3o7$3o2$bo$b2o25b2o$2b2o24bo$o2b2o!
 ;
 
+// another nonsymetric quasicrystal switch engine reaction
+// at about generation 450k a glider starts towards the switch engines, at about 650k it stops them.  At about 750k
+// the residual gliders break thru the ash and the last of them exit the ash around 850k
+const p_850_000m =
+\\7bobo$6bo$7bo2bo$9b3o7$3o2$bo$b2o$2b2o$o2b2o6$38b2o$38bo!
+;
+
 const p_95_206_595m =   // nonsymetric quasicrystal coorder ship reaction
+//x = 16, y = 16, rule = 23/3
 \\bbbbbbbobooboobo$
 \\bbbboboobbobbobb$
 \\bbobbboobboobboo$
@@ -460,5 +473,32 @@ const p_2_230_963m =                     // symetric quasicrystal coorder ship r
 \\oobboooboooboooooooobooobooobboo$
 \\bboobooboboooooooooooobobooboobb$
 \\obobbobbboooboobboobooobbbobbobo!
+;
+
+//#N Caber tosser 1
+//#O Dean Hickerson
+//#C A smaller version of the first caber tosser found. Uses a 7-engine 
+//#C Cordership. Originally found on May 1, 1991, smaller form found on 
+//#C September 2, 1994.
+//#C www.conwaylife.com/wiki/index.php?title=Caber_tosser_1
+//x = 145, y = 114, rule = 23/3
+const caber_tosser = 
+\\31bo113b$32bob2obobo105b$26b3o3b4o3bo105b$32bo2b2ob2o105b$31bo113b$29b
+\\3o113b$29b3o17b2o94b$49bo95b3$14bo130b$14bo130b$14bo130b$17b2o126b$17b
+\\2o38b2o86b$12bo3b3o38bo87b$13b3o129b$14bo130b$13b2o130b$13b3o129b$15bo
+\\8bo120b$13bo8b2ob2o118b$15bo9b2o7bo30b2o78b$13b3o6b3o10b2o28bo79b$24bo
+\\3bo5b2o109b$23bo3bo117b$5bo18b3obo116b$6bob2obobo12b2o117b$3o3b4o3bo
+\\11bobo117b$6bo2b2ob2o12bo26b2o2bo87b$5bo19b2o29bobo86b$3b3o20bo28bo89b
+\\$3b3o21bo117b$57b2o86b2$58b2o85b$57bo87b$55b2ob2o85b$58b2o85b$43bo12bo
+\\88b$43bo101b$45bo5bo93b$44bo6bobo91b$43bo3bo2bo94b$3b2o39bo2bobob2o92b
+\\$3bo45bob2o92b7$11b2o132b$11bo133b2$27b2o2bo113b$30bobo112b$29bo115b2$
+\\31b2o112b$19b2o124b$19bo12b2o111b$31bo113b$29b2ob2o111b$32b2o111b$30bo
+\\114b3$27b2o116b$27bo117b14$122bo22b$121bobo21b$121b2obo7b2o11b$121b2ob
+\\2o6bobo10b$121b2obob3o6bo9b$111b2o8bobo2bo2bo2bo2bo8bo$110bobo9bo4b2o
+\\6bo7b2o$110bo21bobo10b$109b2o21b2o11b6$93b2o15bo34b$94bo15bo34b$110bo
+\\34b2$81bo22b2o39b$81bobo20bo40b$70b2o12b2o9b2o5bobo20bobo17b$70bo13b2o
+\\9bo6b2o19bo3bo17b$84b2o6b2o17b2o10bo12b2o7b$81bobo7b3o17bo2bo7bo14bo7b
+\\$81bo10b2o21bo7bo21b$95bo19bo7bo3bo17b$95b2o18bo9bobo17b$104b2o5bo2bo
+\\30b$103bobo5b2o32b$103bo41b$102b2o!
 ;
 
