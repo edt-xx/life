@@ -445,25 +445,29 @@ pub fn processAlive(t:u32) void {
 
     while (i < list.items.len) {            // add cells to the hash to enable next generation calculation
         
-        var p = list.items[i];              // extract the point                                     
+        var p = list.items[i];              // extract the point 
         
-        if (grid.static[grid.index(p.x|m, p.y|m)])
-            i += 1                                     // keep static cells in alive list - they are stable
-        else {
-            grid.addCell(p);  
-            _ = list.swapRemove(i);         // this is why we use alive[] instead of the method used with check and cells...
-        }                                         
+        const x = p.x & m;                  // setup to cache !grid.static check
+        const y = p.y & m;                  // which gains us near 10%
+        
+        var isActive = !grid.static[grid.index(p.x|m, p.y|m)];
+                 
+        if (isActive) {
+            grid.addCell(p);                // add the effect of the cell
+            _ = list.swapRemove(i);         // this is why we use alive[] instead of the method used with check and cells...                          
+        } else 
+            i += 1;                         // keep static cells in alive list - they are stable                                      
 
-        // add effect of the cell on the surrounding area, if not in a static area
+        // add effect of the cell on its neighbours in an active areas
         
-        p.x +%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);   // doing static check here and
-                    p.y +%= 1;  if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);   // not in addNear call saves ~2%
-        p.x -%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
-        p.x -%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
-                    p.y -%= 1;  if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
-                    p.y -%= 1;  if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
-        p.x +%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
-        p.x +%= 1;              if (!grid.static[grid.index(p.x|m, p.y|m)]) grid.addNear(p);
+        p.x +%= 1;              if (x==m) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);   // doing check here and
+                    p.y +%= 1;  if (y==m) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);   // saves ~2%
+        p.x -%= 1;              if (x==m) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
+        p.x -%= 1;              if (x==0) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
+                    p.y -%= 1;  if (y==m) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
+                    p.y -%= 1;  if (y==0) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
+        p.x +%= 1;              if (x==0) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
+        p.x +%= 1;              if (x==m) isActive = !grid.static[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
         
         // if cell is within the display window update the screen buffer
         
@@ -496,8 +500,8 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
             const c = cells.items[i];
             //const v = c.v;
             if (c.v < 10) {
-                if (c.v == 3) {                                         // birth so add to alive list & flag tile(s) as active
-                    alive[t].appendAssumeCapacity(c.p);
+                if (c.v == 3) {                                         
+                    alive[t].appendAssumeCapacity(c.p);                 // birth so add to alive list & flag tile(s) as active
                     newgrid.setActive(c.p);
                     if (c.p.x > cbx) {                                  // info for auto tracking of activity (births)
                         _ix +=  @intCast(i32,std.math.max(@clz(u32,c.p.x-cbx)-sub,0));
@@ -515,8 +519,8 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
                 if (c.v == 12 or c.v == 13)                             // active cell that survives
                     alive[t].appendAssumeCapacity(c.p)
                 else {
-                    newgrid.setActive(c.p);
-                    if (c.p.x > cbx) {                                  // info for auto tracking of activity (deaths)
+                    newgrid.setActive(c.p);                             // info for auto tracking of activity (deaths)
+                    if (c.p.x > cbx) {                                  
                         _ix -=  @intCast(i32,std.math.max(@clz(u32,c.p.x-cbx)-sub,0));
                     } else if (c.p.x < cbx) {
                         _dx -=  @intCast(i32,std.math.max(@clz(u32,cbx-c.p.x)-sub,0)); 
