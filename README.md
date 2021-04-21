@@ -26,22 +26,21 @@ x,y(4) tells us autotracking is enabled (t) and the effect of distant births and
 x,y(-4) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking.
 The last two numbers are the window position.
 
+    <, >    : limits the generation rate, < halves the rate and > doubles it (when limited you will see rate>xxx/s )
 
-<, >    : limits the generation rate, < halves the rate and > doubles it (when limited you will see rate>xxx/s )
+    +, -    : only show every nth generation.  + doubles n, - halves n (generation xxxx(n) ...)
 
-+, -    : only show every nth generation.  + doubles n, - halves n (generation xxxx(n) ...)
+    [, ]    : slow down [, or speed up ], the rate at which autotracking moves the display window
 
-[, ]    : slow down [, or speed up ], the rate at which autotracking moves the display window
+    cursor  : allow manual positioning of the window using cursor keys (window(-autotracking) ...)
+    keys
 
-cursor  : allow manual positioning of the window using cursor keys (window(-autotracking) ...)
-keys
+    t       : if manual tracking is enabled, disable it (x,y(autotracking)...), if disabled, cycle t thru 1..6, decreasing 
+              the area evaluated for active cells as t is increased.
 
-t       : if manual tracking is enabled, disable it (x,y(autotracking)...), if disabled, cycle t thru 1..6, decreasing 
-          the area evaluated for active cells as t is increased.
+    w       : toggle window postion and tracking.  Patterns often have two interesting areas, this lets you toggle between them.
 
-w       : toggle window postion and tracking.  Patterns often have two interesting areas, this lets you toggle between them.
-
-esc, q  : will exit the program
+    esc, q  : will exit the program
 
 The algorithm used here was developed in the late 70s or early 80s.  I first implemented it on an OSI superboard II using 
 Basic and 6502 assembly.  This was before algorithms like hash life were discovered.  I've been using it when I want to learn a 
