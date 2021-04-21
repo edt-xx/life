@@ -22,8 +22,10 @@ pub fn build(b: *std.build.Builder) void {
 //  p_max               // fastest growth possible
 //  p_52513m            // longest running mesuthelah currently known (march 2021)
     
-    exe.addBuildOption(u32,"Threads",3);                        // threads excluding display update thread
+    exe.addBuildOption(u32,"Threads",3);                        // threads excluding display update thread - we always use a thread for the display update
     exe.addBuildOption(u32,"staticSize",4);                     // size of static tiles, must be a power of 2 (4 is optimal for most patterns)
+                                                                // if a pattern consists of almost all still lives, increase this value (try 8 or 16)
+                                                                // if a pattern has very few still lives reduce this to 2 (no lower)
     
     exe.addPackagePath("zbox","../zbox/src/box.zig");
     exe.linkSystemLibrary("pthread");

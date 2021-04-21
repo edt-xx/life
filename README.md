@@ -14,29 +14,31 @@ zig build -Drelease-safe run (about 10% slower)
 
 zbox can be cloned from: https://github.com/jessrud/zbox.git
 
-generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s  heap(8) 61286/16841  window(2) -11402,-11587
+generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s  heap(8) 61286/16841  window(16) -11402,-11587(4)
 
 The title line tells us this is generation 200198 and the (2) that we are displaying every second generation ( see +, - ).
 The population is 77132 cells with (11719) cells considered active (a birth or death near the cell in the last generation).
 birth and deaths as per the rules of life.
 Generations per second.  If the rate is limited (see s, f) you will see rate> indicating we can run faster.
 We are using a heap size of 2^8 x 2^8 with 61286 entries and we need to check 16841 cells for the next generation.
-window(2) tells us autotracking is enabled ( t ) and it is using 2 generations for tracking info.
-window(-2) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking.
+window(16) tells us we slowed down updating the display window's position by 16 times - causes the display jump around less.
+x,y(4) tells us autotracking is enabled (t) and the effect of distant births and death on autotracking is reduced.
+x,y(-4) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking.
 The last two numbers are the window position.
 
-    s, f    : limits the generation rate, s halves the rate and f doubles it (when limited you will see rate>xxx/s )
-              period and commas are aliases for s & f (s=, and f=.)
+    <, >    : limits the generation rate, < halves the rate and > doubles it (when limited you will see rate>xxx/s )
 
     +, -    : only show every nth generation.  + doubles n, - halves n (generation xxxx(n) ...)
+    
+    [, ]    : slow down [, or speed up ], the rate at which autotracking moves the display window
 
     cursor  : allow manual positioning of the window using cursor keys (window(-autotracking) ...)
     keys
 
-    t       : if manual tracking is enabled, disable it (window(autotracking)...), if disabled, cycle t thru 1..6, decreasing 
-              the area evaluated for active cells.
+    t       : if manual tracking is enabled, disable it (x,y(autotracking)...), if disabled, cycle t thru 1..6, decreasing 
+              the area evaluated for active cells as t is increased.
     
-    w       : toggle window postion and tracking.  Patterns often have two interesting area, this lets you toggle between them.
+    w       : toggle window postion and tracking.  Patterns often have two interesting areas, this lets you toggle between them.
 
     esc, q  : will exit the program
 

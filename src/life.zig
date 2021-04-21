@@ -18,20 +18,23 @@ const build_options = @import("build_options");
 //
 // zbox can be cloned from: https://github.com/jessrud/zbox.git
 //
-// generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s  heap(8) 61286/16841  window(2) -11402,-11587
+// generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s  heap(8) 61286/16841  window(4) -11402,-11587(-2)
 //
 // The title line tells us this is generation 200198 and the (2) that we are displaying every second generation ( see +, - )
 // the population is 77132 cells with (11719) cells considered active (a birth or death near the cell in the last generation)
 // birth and deaths as per the rules of life  
 // generations per second.  If the rate is limited (see s, f) you will see rate> indicating we can run faster.
 // we are using a heap size of 2^8 x 2^8 with 61286 entries and we need to check 16841 cells for the next generation.
-// window(2) tells us autotracking is enabled ( t ) and it is using 2 generations for tracking info.  
-// window(-2) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking
+// window(4) the bigger the number the less the influence of distant births and deaths on autotracking
+// x,y(2) tells us autotracking is enabled ( t ) and it is using 2 generations for tracking info.  
+// x,y(-2) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking
 // the last two numbers are the window position.
 //
-// s, f        : limits the generation rate, s halves the rate and f doubles it (when limited you will see rate>xxx/s )
+// <, >        : limits the generation rate, < halves the rate and > doubles it (when limited you will see rate>xxx/s )
 //
 // +, -        : only show every nth generation.  + doubles n, - halves n (generation xxxx(n) ...)
+//
+// [, ]        : how fast the autotracking position can move, bigger is slower
 //
 // cursor keys : allow manual positioning of the window using cursor keys (window(-autotracking generations) ...)
 //
@@ -53,7 +56,7 @@ const build_options = @import("build_options");
 // How it works.  We have an N x N array of pointers to cells.  The indexes to the array is a hash based on the x, y cords of the cell.
 // Each cell has a pointer to another cell.  So we have a lists of cells where hash(x,y) are the same.  We size the array depending on how
 // loaded it becomes, at near 100% ( eg. N x N is near 2^(N+N)) we increase N.  We use this structure to sum the effects of cells on each
-// other.  We also track 4 x 4 areas ( eg hash(x/4, y/4)) flagging each area static if no births or deaths occur in the area.  Any cells
+// other.  We also track 4 x 4 areas ( eg hash(x|3, y|3)) flagging each area static if no births or deaths occur in the area.  Any cells
 // in a static area survive into the next generation.  We still have to add the effect of these cell on any cell in an ajoining non 
 // static area.  The effect of all this is to drasticly limit the number of cells we need to work with.  Once we finsh processing 
 // the alive arraylist (processAlive), we start a thread to update the display and more to process the cells list (processCells) to 
@@ -70,7 +73,7 @@ const build_options = @import("build_options");
 // Sometimes optimization is not at all obvious.  It is possibe to create a list of cells that might contain a birth or death while
 // processing the alive lists.  This gives us a subset of cells to check usually containing 25-35% of cells.  Normally this would 
 // help since scanning less is good.  However because we spend most of our time in processAlive in addCell and addNear the overhead 
-// to track these cells actually ends up costing us 2-5%.  I added this optimization before the addition of the static cell logic.
+// to track these cells actually ends up costing us 2-5%.  I used this optimization before the addition of the static cell logic.
 // which reduces the number of cells to process by about 70-90%, that changed the balance so the checkList was no longer helping.
 //
 // What AtomicOrder is required?  I was pointed at: https://en.cppreference.com/w/c/atomic/memory_order
@@ -86,13 +89,13 @@ const build_options = @import("build_options");
 
 const pattern = build_options.pattern;          // get setting from build.zig
 const Threads = build_options.Threads;          // Threads to use from build.zig
-const staticSize = build_options.staticSize;    // active consists of staticSize x staticSize tiles.  Must be a power of 2.
+const staticSize = build_options.staticSize;    // static tiles are staticSize x staticSize.  Must be a power of 2.
 
 const cellsThreading = 1_000;               // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops. 
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
 //
-// Threads  gen         rate    cpu
+// Threads  gen         rate    cpu     (latest version increases shown rates nearly 20%)
 // 1        100,000     330s    15%
 // 2        100,000     290/s   27%     using rmw in addCell and addNear seems to be the reason for this decrease
 // 3        100,000     400/s   38%
@@ -321,15 +324,9 @@ const Hash = struct {
     
 };
 
-//fn sum(bmd:[Track]i32, t:isize) i32 {                        // tool used by autotracking (bmd = births - deaths)
-//  var i:u32 = 0; var s:i32 = 0;
-//  while (i < t) : (i += 1) s += std.math.absInt(bmd[i]) catch unreachable;
-//  return s;
-//}
+var screen:display.Buffer = undefined;
 
- var screen:display.Buffer = undefined;
-
-const origin:u32 = 1_000_000_000;                           // about 1/4 of max int which is (near) optimal when both index & tile hashes are considered
+const origin:u32 = 1_000_000_000;                           // about 1/4 of max int which is (near) optimal when hashes are considered
 
 var cbx:u32 = undefined;                                    // starting center of activity 
 var cby:u32 = undefined;
@@ -365,44 +362,31 @@ var cells = std.ArrayList(Cell).init(allocator);             // could be part of
 
 var grid:Hash = undefined;                                   // the current hash containing cells and the static tiles mask array
 var newgrid:Hash = undefined;                                // what will be come the next grid hash
+                
+var cellsLen=[_]u32{undefined} ** Threads;                   // array to record iCells values when exiting threads
+var work:std.Thread.Mutex = std.Thread.Mutex{};              // start processing mutex
+var disp_work:std.Thread.Mutex = std.Thread.Mutex{};         // start display mutex
+var fini:std.Thread.Mutex = std.Thread.Mutex{};              // prevent a thread from finishing before we see its working/displaying
+var begin:std.Thread.Condition = std.Thread.Condition{};     // avoid busy waits when staring work
+var done:std.Thread.Condition = std.Thread.Condition{};      // avoid busy waits when waiting for work to finish
+var working:u32 = 1;                                         // active processing threads
+var displaying:u32 = 1;                                      // active display threads
+var checking:bool = false;                                   // controls what processing is done
+var going:bool = true;                                       // false when quitting
 
-// const some_strings = [_][]const u8{"some string", "some other string"};
-
-//  std.sort.sort(Point, alive.items, {}, Point_lt);
-
-//  fn Point_lt(_ctx: void, a: Point, b: Point) bool {
-//      return switch (std.math.order(a.y, b.y)) {
-//          .lt => true,
-//          .eq => a.x < b.x,
-//          .gt => false,
-//      };
-//  }
-
-//var checkLen=[_]usize{undefined} ** Threads;                      
-var cellsLen=[_]u32{undefined} ** Threads;                     // array to record iCells values when exiting threads
-var work:std.Thread.Mutex = std.Thread.Mutex{};                // start processing mutex
-var disp_work:std.Thread.Mutex = std.Thread.Mutex{};           // start display mutex
-var fini:std.Thread.Mutex = std.Thread.Mutex{};                // prevent a thread from finishing before we see its working/displaying
-var begin:std.Thread.Condition = std.Thread.Condition{};       // avoid busy waits when staring work
-var done:std.Thread.Condition = std.Thread.Condition{};        // avoid busy waits when waiting for work to finish
-var working:u32 = 1;                                           // active processing threads
-var displaying:u32 = 1;                                        // active display threads
-var checking:bool = false;                                     // controls what processing is done
-var going:bool = true;                                            // false when quitting
-
-//qthreadlocal var iCheck:usize = undefined;                   // Index into the check and cell subarrays
+//qthreadlocal var iCheck:usize = undefined;                 // Index into the check and cell subarrays
 threadlocal var iCells:u32 = undefined;
 
-var cellsMax:u32 = 0;                                         // largest length of the cellLen subarrays
+var cellsMax:u32 = 0;                                        // largest length of the cellLen subarrays
 //var checkMax:usize = 0;
 
 pub fn worker(t:u32) void {
     
-    var trigger:*std.Thread.Mutex = undefined;                 // choose mutex to trigger 
-    var counter:*u32 = undefined;                              // and counter to use
-    if (t==0) {                                                
-        trigger = &disp_work;                                  // there are other, more generalized, ways to set this up
-        counter = &displaying;                                 // here I went for the easiest
+    var trigger:*std.Thread.Mutex = undefined;               // choose mutex to trigger 
+    var counter:*u32 = undefined;                            // and counter to use
+    if (t==0) {                                              
+        trigger = &disp_work;                                // there are other, more generalized, ways to set this up
+        counter = &displaying;                               // here I went for the easiest
     } else {                                                   
         trigger = &work;                                       
         counter = &working;                                    
@@ -410,13 +394,13 @@ pub fn worker(t:u32) void {
                                                                
     while (going) {                                             
         {                                                      
-            const w = trigger.acquire();                       // block waiting for work
-            _ = @atomicRmw(u32, counter, .Add, 1, .AcqRel);    // we are now working
+            const w = trigger.acquire();                      // block waiting for work
+            _ = @atomicRmw(u32, counter, .Add, 1, .AcqRel);   // we are now working
             w.release();
-            begin.signal();                                    // tell main to check counter
+            begin.signal();                                   // tell main to check counter
         } 
         if (going) {
-            if (t==0)                                              // depending on the thread & checking, do the work
+            if (t==0)                                         // depending on the thread & checking, do the work
                 display.push(screen) catch {} 
             else if (checking)                                     
                 processCells(t)                                    
@@ -424,10 +408,10 @@ pub fn worker(t:u32) void {
                 processAlive(t); 
         }
         {                                                      
-            const f = fini.acquire();                          // work is now finished
-            _ = @atomicRmw(u32, counter, .Sub, 1, .AcqRel);    // no longer working
+            const f = fini.acquire();                         // work is now finished
+            _ = @atomicRmw(u32, counter, .Sub, 1, .AcqRel);   // no longer working
             f.release(); 
-            done.signal();                                     // tell main to check counter
+            done.signal();                                    // tell main to check counter
         }
     }
 }
@@ -482,16 +466,16 @@ pub fn processAlive(t:u32) void {
     
 pub fn processCells(t:u32) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
 
-    var _ix:i32 = 0;    // use local copies so tracking works (the updates can race and when it happens to often tracking fails)
+    var _ix:i32 = 0;    // use local copies so tracking works (the updates can race and, if it happens too often, tracking fails)
     var _iy:i32 = 0;
     var _dx:i32 = 0;
     var _dy:i32 = 0;
     
     var sub:u32 = 0;
-    if (tg>0)
+    if (tg>0)                                              
         sub = @intCast(u32,11+tg)
     else
-        sub = @intCast(u32,11-tg);
+        sub = @intCast(u32,11-tg);                         // tg is negitive here, so this is an add too
     
     var k:u32 = 0;                                         // loop thru cells arraylist
     while (k < Threads) : (k+=1) {
@@ -519,8 +503,8 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
                 if (c.v == 12 or c.v == 13)                             // active cell that survives
                     alive[t].appendAssumeCapacity(c.p)
                 else {
-                    newgrid.setActive(c.p);                             // info for auto tracking of activity (deaths)
-                    if (c.p.x > cbx) {                                  
+                    newgrid.setActive(c.p);                             
+                    if (c.p.x > cbx) {                                  // info for auto tracking of activity (deaths)
                         _ix -=  @intCast(i32,std.math.max(@clz(u32,c.p.x-cbx)-sub,0));
                     } else if (c.p.x < cbx) {
                         _dx -=  @intCast(i32,std.math.max(@clz(u32,cbx-c.p.x)-sub,0)); 
@@ -653,6 +637,7 @@ pub fn main() !void {
     var rtime:i64 = std.time.milliTimestamp()+1_000;  
     var rate:usize = 1;
     var limit:usize = 65536;                             // optimistic rate limit
+    var sRate:usize = 1;
     var delay:usize = 0;
            
     var dw = disp_work.acquire();                       // block display update thread
@@ -682,26 +667,27 @@ pub fn main() !void {
                          while (@atomicLoad(u32,&displaying,.Acquire)>1) { done.wait(&fini); } 
                          return; 
                        },                       
-             .other => |data| {   const eql = std.mem.eql;
-                                  if (eql(u8,"t",data)) {
-                                      zn=gen;
-                                      if (tg>0) { 
-                                          tg = @rem(tg,Track)+1;    // 2, 3 & 4 are the most interesting for tracking
-                                      } else 
-                                          tg = -tg; 
-                                      //if (zg >= tg) 
-                                      //    zg = 0; 
-                                  } 
-                                  if (eql(u8,"s",data) or eql(u8,",",data)) limit = if (limit>1) limit/2 else limit;     // limit generation rate
-                                  if (eql(u8,"f",data) or eql(u8,".",data)) limit = if (limit<16384) limit*2 else limit;
-                                  if (eql(u8,"w",data)) { const t1=cbx; cbx=cbx_; cbx_=t1; 
-                                                          const t2=cby; cby=cby_; cby_=t2; 
-                                                          const t3=tg;  tg=tg_;   tg_=t3;
-                                                          zn = gen;
-                                                        } 
-                                  if (eql(u8,"+",data)) s += 1;                                                          // update every 2^s generation
-                                  if (eql(u8,"-",data)) s = if (s>0) s-1 else s;
-                                  if (eql(u8,"q",data)) { going=false; dw.release(); w.release();                                 // quit
+             .other => |data| { 
+                                const eql = std.mem.eql;
+                                if (eql(u8,"t",data)) {
+                                    zn=gen;
+                                    if (tg>0) { 
+                                        tg = @rem(tg,Track)+1;    // bigger excludes distant (from cbx, cby) births and deaths
+                                    } else 
+                                        tg = -tg; 
+                                } 
+                                if (eql(u8,"<",data)) limit = if (limit>1) limit/2 else limit;        // limit generation rate
+                                if (eql(u8,">",data)) limit = if (limit<16384) limit*2 else limit;
+                                if (eql(u8,"]",data)) sRate = if (sRate>1) sRate/2 else sRate;        // how fast screen widow moves
+                                if (eql(u8,"[",data)) sRate = if (sRate<64) sRate*2 else sRate;
+                                if (eql(u8,"w",data)) { const t1=cbx; cbx=cbx_; cbx_=t1;              // toggle active window
+                                                        const t2=cby; cby=cby_; cby_=t2; 
+                                                        const t3=tg;  tg=tg_;   tg_=t3;
+                                                        zn = gen;
+                                                      } 
+                                if (eql(u8,"+",data)) s += 1;                                         // update every 2^s generation
+                                if (eql(u8,"-",data)) s = if (s>0) s-1 else s;
+                                if (eql(u8,"q",data)) { going=false; dw.release(); w.release();                                 // quit
                                                           while (@atomicLoad(u32,&displaying,.Acquire)>1) { done.wait(&fini); } 
                                                           return; 
                                                         }     
@@ -812,7 +798,7 @@ pub fn main() !void {
 
         var tt = if (delay>0) ">" else " ";    // needed due to 0.71 compiler buglet with if in print args
         
-        _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{}",.{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, tg, @intCast(i64,xl)-origin, @intCast(i64,yl)-origin});
+        _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{}({})",.{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, sRate, @intCast(i64,xl)-origin, @intCast(i64,yl)-origin, tg});
         
         //_ = try screen.cursorAt(1,0).writer().print("debug {} {} {}, {} {} {}, {} {} {}, {} {}",.{alive[0].items.len,cellsLen[0]/3,checkLen[0]/3,alive[1].items.len,cellsLen[1]/3,checkLen[1]/3,alive[2].items.len,cellsLen[2]/3,checkLen[2]/3,bbb,ddd});
         
@@ -909,15 +895,15 @@ pub fn main() !void {
             
         // switch focus of "center of activity" is moving off display window
         if (tg>0 and gen>=zn) {
-            if (std.math.absCast(xl +% cols/2 -% cbx) > 4*cols/5)  {
+            if (std.math.absCast(xl +% cols/2 -% cbx) > 2*cols/3)  {
                 xl = cbx - cols/2;                       
                 xh = xl + cols - 1;
             }
-            if (std.math.absCast(yl +% rows/2 -% cby) > 4*rows/5)  {
+            if (std.math.absCast(yl +% rows/2 -% cby) > 2*rows/3)  {
                 yl = cby - rows/2;
                 yh = yl + rows - 2;     // allow for the title line
             }
-            zn = gen+rate/std.math.clamp(62-@clz(@TypeOf(rate),rate+1),1,10);    // 1/10 second above 8192/s down to 1s at 8/s
+            zn = gen+sRate*rate/std.math.clamp(62-@clz(@TypeOf(rate),rate+1),1,10);    // 1/10 second above 8192/s down to 1s at 8/s
         }
         
     }
