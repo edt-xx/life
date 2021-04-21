@@ -19,9 +19,9 @@ generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s 
 The title line tells us this is generation 200198 and the (2) that we are displaying every second generation ( see +, - ).
 The population is 77132 cells with (11719) cells considered active (a birth or death near the cell in the last generation).
 birth and deaths as per the rules of life.
-Generations per second.  If the rate is limited (see s, f) you will see rate> indicating we can run faster.
+Generations per second.  If the rate is limited (see <, >) you will see rate> indicating we can run faster.
 We are using a heap size of 2^8 x 2^8 with 61286 entries and we need to check 16841 cells for the next generation.
-window(16) tells us we slowed down updating the display window's position by 16 times - causes the display jump around less.
+window(16) tells us we slowed down updating the display window's position by 16 times - causes the display jump around less (see [, ]).
 x,y(4) tells us autotracking is enabled (t) and the effect of distant births and death on autotracking is reduced.
 x,y(-4) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking.
 The last two numbers are the window position.
