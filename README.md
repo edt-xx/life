@@ -53,7 +53,7 @@ updating the display and for the generation update.  Its been a good learning to
 How it works.  We have an N x N array of pointers to cells.  The indexes to the array is a hash based on the x, y cords of the cell.
 Each cell has a pointer to another cell.  So we have an array of lists of cells where hash(x,y) are the same.  We size the array
 depending on how loaded it becomes, at near 100% ( eg. N x N is near 2^(N+N)) we increase N.  We use this structure to sum the 
-effects of cells on each other.  We also track 4 x 4 areas ( eg hash(x/4, y/4)) flagging each area static if births or deaths occur 
+effects of cells on each other.  We also track 4 x 4 areas ( eg hash(x|3, y|3)) flagging each area static if births or deaths occur 
 in the area.  Any cells in a static area survive into the next generation.  We still have to add the effect of these cell on cells 
 in ajoining non static areas.  The effect of all this is to drasticly limit the number of cells we need to work with.  Once we finsh 
 processing the alive arraylist (processAlive), we start a thread to update the display and others to process the cells list 
