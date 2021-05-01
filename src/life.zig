@@ -640,6 +640,7 @@ pub fn main() !void {
     var rate:usize = 1;
     var limit:usize = 65536;                             // optimistic rate limit
     var sRate:usize = 1;
+    var sRate_ = sRate;
     var delay:usize = 0;
            
     var dw = disp_work.acquire();                       // block display update thread
@@ -680,11 +681,12 @@ pub fn main() !void {
                                 } 
                                 if (eql(u8,"<",data)) limit = if (limit>1) limit/2 else limit;        // limit generation rate
                                 if (eql(u8,">",data)) limit = if (limit<16384) limit*2 else limit;
-                                if (eql(u8,"]",data)) sRate = if (sRate>1) sRate/2 else sRate;        // how fast screen window moves
-                                if (eql(u8,"[",data)) sRate = if (sRate<64) sRate*2 else sRate;
+                                if (eql(u8,"[",data)) sRate = if (sRate>1) sRate/2 else sRate;        // how fast screen window moves
+                                if (eql(u8,"]",data)) sRate = if (sRate<64) sRate*2 else sRate;
                                 if (eql(u8,"w",data)) { const t1=cbx; cbx=cbx_; cbx_=t1;              // toggle active window
                                                         const t2=cby; cby=cby_; cby_=t2; 
                                                         const t3=tg;  tg=tg_;   tg_=t3;
+                                                        const t4=sRate; sRate=sRate_; sRate_=t4;
                                                         zn = gen;
                                                       } 
                                 if (eql(u8,"+",data)) s += 1;                                         // update every 2^s generation
