@@ -16,22 +16,28 @@ pub fn build(b: *std.build.Builder) void {
     exe.addBuildOption([]const u8,"pattern",p_1_700_000m);
     
 //  p_95_206_595m       // pattern used in benchmarking (corder ship, non symetric, terminating)
-//  p_19_659_494m       // symetric quasi-crystal coorder ship reaction
+//  p_19_659_494m       // symetric quasi-crystal coorder ship reaction.
 //  p_1_700_000m        // my current favorite pattern, use cursor keys and watch at -n,-n where n<1400 or so.
 //  p_850_000m          // at about 450k a glider starts towards the engines, at 650k it destroys them, at 750k ash is penitrated
 //  p_max               // fastest growth possible
 //  p_52513m            // longest running mesuthelah currently known (march 2021)
     
-    exe.addBuildOption(u32,"Threads",3);                        // threads excluding display update thread - we always use a thread for the display update
-    exe.addBuildOption(u32,"staticSize",4);                     // size of static tiles, must be a power of 2 (4 is optimal for most patterns)
-                                                                // if a pattern consists of almost all still lives, increase this value (try 8 or 16)
-                                                                // if a pattern has very few still lives reduce this to 2 (no lower)
+    exe.addBuildOption(u32,"Threads",7);                // Threads excluding display update thread - we always use a thread for the display update
+    exe.addBuildOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
+                                                        // If a pattern consists of almost all still lives, increase this value (try 8 or 16)
+                                                        // If a pattern has very few still lives reduce this to 2 (no lower)
     
     exe.addPackagePath("zbox","../zbox/src/box.zig");
     exe.linkSystemLibrary("pthread");
-    exe.setTarget(target);
+    exe.setTarget(target);                              // use the best options for the cpu we are building on
+    //exe.setTarget(.{                                    // generic x86_64 - about 8% slower on my box
+    //    .cpu_arch = .x86_64,
+    //    .os_tag = .linux,
+    //    .abi = .gnu,
+    //    .cpu_model = .baseline,                          // .baseline encompasses more old cpus
+    //});
     exe.setBuildMode(mode);
-    //exe.setBuildMode(std.builtin.Mode.ReleaseFast);       // to hard code ReleaseFast...
+  //exe.setBuildMode(std.builtin.Mode.ReleaseFast);     // to hard code ReleaseFast/ReleaseSafe etc
     exe.setOutputDir(".");
     exe.install();
 

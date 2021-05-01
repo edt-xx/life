@@ -14,7 +14,9 @@ const build_options = @import("build_options");
 // 
 // zig build -Drelease-fast run 
 // or 
-// zig build -Drelease-safe run (about 10% slower) 
+// zig build -Drelease-safe run  (about 10% slower) 
+// or
+// zig build -Drelease-fast -Dtarget=x86_64-linux-gnu -Dcpu=baseline   (generic linux build)
 //
 // zbox can be cloned from: https://github.com/jessrud/zbox.git
 //
@@ -678,7 +680,7 @@ pub fn main() !void {
                                 } 
                                 if (eql(u8,"<",data)) limit = if (limit>1) limit/2 else limit;        // limit generation rate
                                 if (eql(u8,">",data)) limit = if (limit<16384) limit*2 else limit;
-                                if (eql(u8,"]",data)) sRate = if (sRate>1) sRate/2 else sRate;        // how fast screen widow moves
+                                if (eql(u8,"]",data)) sRate = if (sRate>1) sRate/2 else sRate;        // how fast screen window moves
                                 if (eql(u8,"[",data)) sRate = if (sRate<64) sRate*2 else sRate;
                                 if (eql(u8,"w",data)) { const t1=cbx; cbx=cbx_; cbx_=t1;              // toggle active window
                                                         const t2=cby; cby=cby_; cby_=t2; 
