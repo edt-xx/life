@@ -93,8 +93,6 @@ const pattern = build_options.pattern;          // get setting from build.zig
 const Threads = build_options.Threads;          // Threads to use from build.zig
 const staticSize = build_options.staticSize;    // static tiles are staticSize x staticSize.  Must be a power of 2.
 
-const cellsThreading = 1_000;               // Condition vars and -lpthread (std.Thread.Condition linux impl is buggy) removes spinloops. 
-
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
 //
 // Threads  gen         rate    cpu     (latest version increases shown rates nearly 20%)
@@ -253,25 +251,18 @@ const Hash = struct {
                         c.v += 10
                     else
                         _ = @atomicRmw(u8, &c.v, .Add, 10, .Monotonic);
-                    //if (v > 2) return;                         
-                    //check.items[iCheck] = c;                   // potential survivor, add to checklist if not already done for births
-                    //iCheck += Threads;
                     return;
                 }
                 i = c.n;          // advance to the next cell
             }
             cells.items[iCells] = Cell{.p=p, .n=head, .v=10};     // cell not in heap, add it.  Note iCells is threadlocal.             
             if (Threads == 1) {
-                self.hash[h] = &cells.items[iCells];
-                //check.items[iCheck] = &cells.items[iCells];     // add to check list
+                self.hash[h] = &cells.items[iCells];                //check.items[iCheck] = &cells.items[iCells];     // add to check list
                 iCells += Threads;
                 std.debug.assert(iCells < cellsMax);
-                //iCheck += Threads;
                 return;
             } else {
                 i = @cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .Release, .Monotonic) orelse {                    
-                    //check.items[iCheck] = &cells.items[iCells];  // add to check list
-                    //iCheck += Threads;
                     iCells += Threads;                             // commit the Cell
                     std.debug.assert(iCells < cellsMax);
                     return;
@@ -301,12 +292,9 @@ const Hash = struct {
                         c.v += 1
                     else
                         _ = @atomicRmw(u8,&c.v,.Add,1,.Monotonic); 
-                    //if (v != 2) return;            // v+1 is not 3, this is not a possible birth                            
-                    //check.items[iCheck] = c;       // potential birth, add to checklist
-                    //iCheck += Threads;
                     return;
                 }
-                i = c.n;          // advance to the next cel
+                i = c.n;          // advance to the next cell
             }
             cells.items[iCells] = Cell{.p=p, .n=head, .v=1};  // cell not in heap, add it.  Note iCells is threadlocal.
             if (Threads == 1) {
@@ -372,15 +360,13 @@ var fini:std.Thread.Mutex = std.Thread.Mutex{};              // prevent a thread
 var begin:std.Thread.Condition = std.Thread.Condition{};     // avoid busy waits when staring work
 var done:std.Thread.Condition = std.Thread.Condition{};      // avoid busy waits when waiting for work to finish
 var working:u32 = 1;                                         // active processing threads
-var displaying:u32 = 1;                                      // active display threads
+var displaying:u32 = 0;                                      // active display threads
 var checking:bool = false;                                   // controls what processing is done
 var going:bool = true;                                       // false when quitting
 
-//qthreadlocal var iCheck:usize = undefined;                 // Index into the check and cell subarrays
-threadlocal var iCells:u32 = undefined;
+threadlocal var iCells:u32 = undefined;                      // index to cells thead partition
 
 var cellsMax:u32 = 0;                                        // largest length of the cellLen subarrays
-//var checkMax:usize = 0;
 
 pub fn worker(t:u32) void {
     
@@ -424,7 +410,6 @@ pub fn processAlive(t:u32) void {
     
     var list = &alive[t];                   // extacting x and y and using them does not add more speed here
     
-    // iCheck = t;                          
     iCells = t;                             // threadlocal vars, we trade memory for thread safey and speed
                                             // and treat the arrayList as dynamic arrays
     var i:u32 = 0;
@@ -460,10 +445,8 @@ pub fn processAlive(t:u32) void {
         if (p.x >= xl and p.x <= xh and p.y >= yl and p.y <= yh) {
             screen.cellRef(p.y-yl+1,p.x-xl).char = 'O';
         }        
-    }    
-    //std.debug.assert(iCheck < check.capacity);  // do some safely checks, just in case...
-    //checkLen[t] = iCheck;                       // save the sizes of the check and cell arraylist sublists
-    cellsLen[t] = iCells;  
+    }                         
+    cellsLen[t] = iCells;                         // save the size of the cell partition for this thread
 }
     
 pub fn processCells(t:u32) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
@@ -484,7 +467,6 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
         var i:u32 = k + Threads*t;
         while (i < cellsLen[k]) : (i+=Threads*Threads) {   // scan all cells in a thread safe way that balances the alive[] lists
             const c = cells.items[i];
-            //const v = c.v;
             if (c.v < 10) {
                 if (c.v == 3) {                                         
                     alive[t].appendAssumeCapacity(c.p);                 // birth so add to alive list & flag tile(s) as active
@@ -628,12 +610,7 @@ pub fn main() !void {
     while (t<Threads) : ( t+=1 ) {
         for (alive[t].items) |p| { newgrid.setActive(p); }   // set all tiles active for the first generation
     }
-    
-    //try check.ensureCapacity(pop*6+3);    // prepare for main loop
-    //checkMax = check.capacity-1; 
-    //try check.resize(checkMax);           // allow access to all allocated items
-        
-    b = @intCast(u32,pop);                  // everything is a birth at the start
+    b = @intCast(u32,pop);                              // everything is a birth at the start
     
     var ogen:u32 = 0;                                   // info for rate calculations
     var rtime:i64 = std.time.milliTimestamp()+1_000;  
@@ -709,19 +686,18 @@ pub fn main() !void {
         
         try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
-        try cells.ensureCapacity((pop-static)*(8+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
-        try cells.resize(cells.capacity-1);                  // arrayList length to max
-        cellsMax = @intCast(u32,cells.capacity);
-        
-        //try check.ensureCapacity(std.math.max((b+d)*9*Threads,5*checkMax/4));    // resize the list of cells that might change state
-        //try check.resize(check.capacity-1);
+        if (cells.capacity < (pop-static)*(8+Threads)) {
+            try cells.ensureCapacity((pop-static)*(8+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
+            try cells.resize(cells.capacity-1);                  // arrayList length to max
+            cellsMax = @intCast(u32,cells.capacity);
+        }
         
         // wait for thread to finish before (possibily) changing anything to do with the display
         
         if (gen%std.math.shl(u32,1,s)==0) {
             //const tmp:i128 = std.time.nanoTimestamp();
             f = fini.acquire();
-            while (@atomicLoad(u32,&displaying,.Monotonic)>1) {    // wait for display worker thread, usually its done before we get here
+            while (@atomicLoad(u32,&displaying,.Monotonic)>0) {    // wait for display worker thread, usually its done before we get here
                 done.wait(&fini);
             }
             f.release();
@@ -756,27 +732,27 @@ pub fn main() !void {
         // nnn += 1;
         // _ = try screen.cursorAt(3,0).writer().print("release working {}",.{nnn});
         
-        checking = false;
         
         if (Threads > 1) {
+            
+            checking = false;                                          // tell worker to use processAlive
+            
             f = fini.acquire();                                        // block completions so a quickly finishing thread is seen
             while (@atomicLoad(u32,&working,.Monotonic)<Threads) {     // wait for all worker threads to wake each other
                 begin.wait(&work);                                     // release work mutex and wait for worker to signal 
             }
             f.release();                                               // allow completions
-        }
                     
-        processAlive(0);                                               // Use our existing thread. 
+            processAlive(0);                                           // Use our existing thread. 
         
-        if (Threads > 1) {
             f = fini.acquire();
             while (@atomicLoad(u32,&working,.Monotonic)>1) {           // wait for all worker threads to finish
                 done.wait(&fini);
             }
             f.release();
-        }
+        } else
+            processAlive(0);
         
-        //checkMax = 0;
         cellsMax = 0;
         static = 0;
         
@@ -784,8 +760,7 @@ pub fn main() !void {
         t = 0;                                          
         while (t<Threads) : ( t+=1 ) {  
             // _ = try screen.cursorAt(t+1,20).writer().print("{}",.{alive[t].items.len});
-            static += @intCast(u32,alive[t].items.len);
-            //checkMax = std.math.max(checkMax,checkLen[t]);
+            static += @intCast(u32,alive[t].items.len);            //checkMax = std.math.max(checkMax,checkLen[t]);
             cellsMax = std.math.max(cellsMax,cellsLen[t]);
         } 
         
@@ -813,7 +788,7 @@ pub fn main() !void {
         
         if ((gen+1)%std.math.shl(u32,1,s)==0) {                     // update display every 2^s generations
             f=fini.acquire();
-            while (@atomicLoad(u32,&displaying,.Monotonic)<2) {     // wait for worker thread
+            while (@atomicLoad(u32,&displaying,.Monotonic)<1) {     // wait for worker thread
                 begin.wait(&disp_work);                             // release disp_work mutex and wait for worker to signal
             }
             f.release();
@@ -836,10 +811,11 @@ pub fn main() !void {
         
         t = 0;                                              // make sure the alive[] arraylists can grow
         while (t<Threads) : ( t+=1 ) {
-            try alive[t].ensureCapacity(alive[t].items.len+cellsMax/2+2);
+            if (alive[t].capacity < alive[t].items.len+cellsMax/2+2)
+                try alive[t].ensureCapacity(alive[t].items.len+cellsMax/2+2);
         }
 
-        if (cellsMax > cellsThreading and Threads>1) {                   
+        if (Threads>1) {                   
             
             checking = true;                                            // tell worker to use processCells  
             
@@ -856,11 +832,8 @@ pub fn main() !void {
                 done.wait(&fini);
             }
             f.release();
-        } else {
-            t = 0;                                                      // in most cases this is the faster option
-            while (t<Threads) : (t+=1) 
-                processCells(t);
-        }            
+        } else 
+            processCells(0);
                                        
         // higher rates yield smaller increments 
         inc = std.math.max(@clz(@TypeOf(rate),rate+1)-16,1);            // increase increment as we slow down
@@ -889,11 +862,7 @@ pub fn main() !void {
                     cby -= inc;
             }            
         }
-        
-        // keep a history so short cycle patterns with non symetric birth & deaths will be ignored for tracking
-        // if (tg!=0)
-        //    zg = gen%std.math.absCast(tg);
-        
+               
         // clear counters for tracking info in the next generation
         dx = 0;
         ix = 0;

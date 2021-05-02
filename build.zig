@@ -24,7 +24,7 @@ pub fn build(b: *std.build.Builder) void {
     
     exe.addBuildOption(u32,"Threads",3);                // Threads excluding display update thread - we always use a thread for the display update
     exe.addBuildOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
-                                                        // If a pattern consists of almost all still lives, increase this value (try 8 or 16)
+                                                        // If a pattern consists of almost all still lives, increase this value (try 8)
                                                         // If a pattern has very few still lives reduce this to 2 (no lower)
     
     exe.addPackagePath("zbox","../zbox/src/box.zig");
@@ -34,7 +34,7 @@ pub fn build(b: *std.build.Builder) void {
     //    .cpu_arch = .x86_64,
     //    .os_tag = .linux,
     //    .abi = .gnu,
-    //    .cpu_model = .baseline,                          // .baseline encompasses more old cpus
+    //    .cpu_model = .baseline,                         // .baseline encompasses more old cpus
     //});
     exe.setBuildMode(mode);
   //exe.setBuildMode(std.builtin.Mode.ReleaseFast);     // to hard code ReleaseFast/ReleaseSafe etc
@@ -510,3 +510,30 @@ const caber_tosser =
 \\30b$103bobo5b2o32b$103bo41b$102b2o!
 ;
 
+const fireship =
+\\27b2o2b2o80b2o2b2o$27b2o2b2o80b2o2b2o$26b3o2b3o78b3o2b3o$26b3o2b3o78b
+\\3o2b3o2$26bo6bo78bo6bo$26bo2b2o2bo78bo2b2o2bo$27b6o80b6o$10b2o2b2o114b
+\\2o2b2o$10b2o2b2o114b2o2b2o$9b3o2b3o12b2o84b2o12b3o2b3o$9b3o2b3o11bo2bo
+\\82bo2bo11b3o2b3o$28b4o82b4o$9bo6bo10b2o2b2o80b2o2b2o10bo6bo$9bo2b2o2bo
+\\10bo4bo80bo4bo10bo2b2o2bo$10b6o11bo4bo80bo4bo11b6o$28b4o82b4o2$12b2o
+\\118b2o9b2o$11bo2bo116bo2bo7bo2bo$11b4o14b2o100b4o7bo2bo$10b2o2b2o15bo
+\\98b2o2b2o5bo4bo$10bo4bo14b2o98bo4bo5bo4bo$10bo4bo14bobo97bo4bo6b4o$11b
+\\4o116b4o6b2o2b2o$4b2o135bo4bo$3b4o134bo4bo2$2b6o$3b4o135b4o$143b2o$2b
+\\2o2b2o$2obo2bob2o130b2o4b2o$3bo2bo132bo2bo2bo2bo$140b3o2b3o$140b2o4b2o
+\\$4b2o$4b2o2$bobo2bobo$o2bo2bo2bo$o8bo$o8bo$2o6b2o$2b6o$74bo$74b2o$73bo
+\\bo2$9b2o2b2o116b2o2b2o$9b2o2b2o116b2o2b2o$8b3o2b3o114b3o2b3o$8b3o2b3o
+\\114b3o2b3o2$8bo6bo114bo6bo$8bo2b2o2bo114bo2b2o2bo$9b6o101b2o13b6o$116b
+\\obo$117b3o$11b2o104bo2bo12b2o$10bo2bo103bo3bo10bo2bo$10b4o102b2o3bo10b
+\\4o$9b2o2b2o101bo3b2o9b2o2b2o$9bo4bo102b3o11bo4bo$9bo4bo102b3o11bo4bo$
+\\10b4o118b4o5$14b2o114b2o$13b4o112b4o2$12b6o110b6o$13b4o112b4o2$12b2o2b
+\\2o25b2o56b2o25b2o2b2o$10b2obo2bob2o21b2o2b2o52b2o2b2o21b2obo2bob2o$13b
+\\o2bo26b2o56b2o26bo2bo$40bo6bo50bo6bo$41bo4bo52bo4bo$14b2o27b2o56b2o27b
+\\2o$14b2o24b3o2b3o50b3o2b3o24b2o$40b2o4b2o50b2o4b2o$11bobo2bobo108bobo
+\\2bobo$10bo2bo2bo2bo106bo2bo2bo2bo$10bo8bo23b2o56b2o23bo8bo$10bo8bo22bo
+\\2bo54bo2bo22bo8bo$10b2o6b2o106b2o6b2o$12b6o4b2o17bo4bo52bo4bo17b2o4b6o
+\\$20b2o2b2o14b2o4b2o50b2o4b2o14b2o2b2o$22b2o15bo2bo2bo2bo48bo2bo2bo2bo
+\\15b2o$19bo6bo12b2ob4ob2o48b2ob4ob2o12bo6bo$20bo4bo15bo4bo52bo4bo15bo4b
+\\o$22b2o98b2o$19b3o2b3o92b3o2b3o$19b2o4b2o92b2o4b2o3$22b2o98b2o$21bo2bo
+\\96bo2bo2$20bo4bo94bo4bo$19b2o4b2o92b2o4b2o$18bo2bo2bo2bo90bo2bo2bo2bo$
+\\18b2ob4ob2o90b2ob4ob2o$20bo4bo94bo4bo!
+;
