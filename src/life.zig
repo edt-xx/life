@@ -95,15 +95,15 @@ const staticSize = build_options.staticSize;    // static tiles are staticSize x
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
 //
-// Threads  gen         rate    cpu     (latest version increases shown rates nearly 20%)
-// 1        100,000     330s    15%
-// 2        100,000     290/s   27%     using rmw in addCell and addNear seems to be the reason for this decrease
-// 3        100,000     400/s   38%
-// 4        100,000     440/s   46%
-// 5        100,100     470/s   57%
-// 6        100,000     520/s   67%
-// 7        100,000     550/s   73%
-// 8        100,000     500/s   68%     The update threads + display thread > CPU threads so we take longer in processCells/displayUqpdate
+// Threads  gen         rate    cpu
+// 1        100,000     430s    15%
+// 2        100,000     350s    27%     using rmw in addCell and addNear seems to be the reason for this decrease
+// 3        100,000     460/s   37%
+// 4        100,000     500/s   46%
+// 5        100,100     550/s   57%
+// 6        100,000     605/s   67%
+// 7        100,000     660/s   75%
+// 8        100,000     595/s   68%     The update threads + display thread > CPU threads so we take longer in processCells/displayUqpdate
 //
 // operf with 6 threads reports (anything over 1%):
 //
@@ -686,11 +686,9 @@ pub fn main() !void {
         
         try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
-        if (cells.capacity < (pop-static)*(8+Threads)) {
-            try cells.ensureCapacity((pop-static)*(8+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
-            try cells.resize(cells.capacity-1);                  // arrayList length to max
-            cellsMax = @intCast(u32,cells.capacity);
-        }
+        try cells.ensureCapacity((pop-static)*(8+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
+        try cells.resize(cells.capacity-1);                  // arrayList length to max
+        cellsMax = @intCast(u32,cells.capacity);
         
         // wait for thread to finish before (possibily) changing anything to do with the display
         
@@ -811,8 +809,10 @@ pub fn main() !void {
         
         t = 0;                                              // make sure the alive[] arraylists can grow
         while (t<Threads) : ( t+=1 ) {
-            if (alive[t].capacity < alive[t].items.len+cellsMax/2+2)
-                try alive[t].ensureCapacity(alive[t].items.len+cellsMax/2+2);
+            if (Threads > 1)
+                try alive[t].ensureCapacity(alive[t].items.len+cellsMax/(Threads*4))
+            else 
+                try alive[t].ensureCapacity(alive[t].items.len+cellsMax/(Threads*3));
         }
 
         if (Threads>1) {                   
