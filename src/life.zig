@@ -257,12 +257,12 @@ const Hash = struct {
             }
             cells.items[iCells] = Cell{.p=p, .n=head, .v=10};     // cell not in heap, add it.  Note iCells is threadlocal.             
             if (Threads == 1) {
-                self.hash[h] = &cells.items[iCells];                //check.items[iCheck] = &cells.items[iCells];     // add to check list
+                self.hash[h] = &cells.items[iCells];              
                 iCells += Threads;
                 std.debug.assert(iCells < cellsMax);
                 return;
             } else {
-                i = @cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .Release, .Monotonic) orelse {                    
+                i = @cmpxchgWeak(?*Cell, &self.hash[h], head, &cells.items[iCells], .Release, .Monotonic) orelse {    // weak is maybe 1% faster                   
                     iCells += Threads;                             // commit the Cell
                     std.debug.assert(iCells < cellsMax);
                     return;
@@ -303,7 +303,7 @@ const Hash = struct {
                 std.debug.assert(iCells < cellsMax);
                 return;
             } else {
-                i = @cmpxchgStrong(?*Cell, &self.hash[h], head, &cells.items[iCells], .Release, .Monotonic) orelse {                                   
+                i = @cmpxchgWeak(?*Cell, &self.hash[h], head, &cells.items[iCells], .Release, .Monotonic) orelse {  // weak is maybe 1% faster                                
                     iCells += Threads;
                     std.debug.assert(iCells < cellsMax);
                     return;
@@ -314,7 +314,7 @@ const Hash = struct {
     
 };
 
-var screen:display.Buffer = undefined;
+var screen:*display.Buffer = undefined;
 
 const origin:u32 = 1_000_000_000;                           // about 1/4 of max int which is (near) optimal when hashes are considered
 
@@ -389,7 +389,7 @@ pub fn worker(t:u32) void {
         } 
         if (going) {
             if (t==0)                                         // depending on the thread & checking, do the work
-                display.push(screen) catch {} 
+                display.push(screen.*) catch {} 
             else if (checking)                                     
                 processCells(t)                                    
             else                                                   
@@ -543,8 +543,11 @@ pub fn main() !void {
     var cols:u32 = @intCast(u32,size.width);
     var rows:u32 = @intCast(u32,size.height);
     
-    screen = try display.Buffer.init(allocator, size.height, size.width);
-    defer screen.deinit();
+    var s0 = try display.Buffer.init(allocator, size.height, size.width);
+    defer s0.deinit();
+    var s1 = try display.Buffer.init(allocator, size.height, size.width);
+    defer s1.deinit();    
+    // var dt:u32 = 0;
 
 // rle pattern decoding
     var pop:u32 = 0;
@@ -690,22 +693,17 @@ pub fn main() !void {
         try cells.resize(cells.capacity-1);                  // arrayList length to max
         cellsMax = @intCast(u32,cells.capacity);
         
-        // wait for thread to finish before (possibily) changing anything to do with the display
+        // select screen buffer for next generation
+        if (gen&1 == 0) 
+            screen = &s0
+        else
+            screen = &s1;
         
-        if (gen%std.math.shl(u32,1,s)==0) {
-            //const tmp:i128 = std.time.nanoTimestamp();
-            f = fini.acquire();
-            while (@atomicLoad(u32,&displaying,.Monotonic)>0) {    // wait for display worker thread, usually its done before we get here
-                done.wait(&fini);
-            }
-            f.release();
-            //ddd=(std.time.nanoTimestamp()-tmp);
-        }
- 
-        // update the size of screen buffer
+         // update the size of screen buffer
          size = try display.size();
-         if (size.width != cols or size.height != rows) {
+         if (size.width != screen.width or size.height != screen.height)
              try screen.resize(size.height, size.width);
+         if (size.width != cols or size.height != rows) {
              cols = @intCast(u32,size.width);
              rows = @intCast(u32,size.height);
              xl = cbx - cols/2; 
@@ -762,6 +760,19 @@ pub fn main() !void {
             cellsMax = std.math.max(cellsMax,cellsLen[t]);
         } 
         
+        // wait for display thread to finish before next generation
+        
+        if (gen%std.math.shl(u32,1,s)==0) {
+            //const tmp:i128 = std.time.nanoTimestamp();
+            f = fini.acquire();
+            while (@atomicLoad(u32,&displaying,.Monotonic)>0) {    // wait for display worker thread, usually its done before we get here
+                done.wait(&fini);
+                // dt += 1;
+            }
+            f.release();
+            //ddd=(std.time.nanoTimestamp()-tmp);
+        }
+ 
         // adjust delay to limit rate as user requests.  Results are approximate 
         if (std.time.milliTimestamp() >= rtime) { 
             rtime = std.time.milliTimestamp()+1_000;
