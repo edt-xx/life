@@ -35,9 +35,8 @@ The last two numbers are the window position.
     cursor  : allow manual positioning of the window using cursor keys (window(-autotracking) ...)
     keys
 
-    t       : if manual tracking is enabled, disable it (x,y(autotracking)...), if disabled, cycle t thru 1..6, decreasing 
-              the area evaluated for active cells as t is increased.
-
+    t,T     : if manual tracking enabled, disable, if disabled decrease area monitored for tracking (t) or increase area (T).  
+    
     w       : toggle window postion and tracking.  Patterns often have two interesting areas, this lets you toggle between them.
 
     esc, q  : will exit the program
