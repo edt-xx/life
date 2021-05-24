@@ -14,7 +14,7 @@ zig build -Drelease-safe run (about 10% slower)
 
 zbox can be cloned from: https://github.com/jessrud/zbox.git
 
-generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s  heap(8) 61286/16841  window(16) -11402,-11587(4)
+generation 299198(2) population 77132(11719) births 3217 deaths 3228 rate 260/s  heap(8) 61286/16841  window(16) -11402,-11587 ±2048
 
 The title line tells us this is generation 200198 and the (2) that we are displaying every second generation ( see +, - ).
 The population is 77132 cells with (11719) cells considered active (a birth or death near the cell in the last generation).
@@ -35,7 +35,7 @@ The last two numbers are the window position.
     cursor  : allow manual positioning of the window using cursor keys (window(-autotracking) ...)
     keys
 
-    t,T     : if manual tracking enabled, disable, if disabled decrease area monitored for tracking (t) or increase area (T).  
+    t,T     : if manual tracking enabled, disable, if disabled decrease area monitored for tracking (t) or increase area (T).
     
     w       : toggle window postion and tracking.  Patterns often have two interesting areas, this lets you toggle between them.
 
