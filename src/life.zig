@@ -458,8 +458,7 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
     var _dx:i32 = 0;
     var _dy:i32 = 0;
     
-    var sub:u32 = 0b00001000_00000000_00000000;                     // 2^20
-    sub >>= @intCast(u5,std.math.absInt(tg)) catch unreachable;     // higher tg considers a smaller area.
+    const sub:u32 = @as(u32,0b00001000_00000000_00000000) >> @intCast(u5,std.math.absCast(tg));  // 2^20 shifted by abs(tg), larger tg smaller area.           
         
     var k:u32 = 0;                                         // loop thru cells arraylist
     while (k < Threads) : (k+=1) {
