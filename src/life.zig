@@ -27,10 +27,9 @@ const build_options = @import("build_options");
 // birth and deaths as per the rules of life  
 // generations per second.  If the rate is limited (see s, f) you will see rate> indicating we can run faster.
 // we are using a heap size of 2^8 x 2^8 with 61286 entries and we need to check 16841 cells for the next generation.
-// window(4) the bigger the number the less the influence of distant births and deaths on autotracking
-// x,y(2) tells us autotracking is enabled ( t ) and it is using 2 generations for tracking info.  
-// x,y(-2) would tell us autotracking is disabled, use cursor keys to move window or t to restart autotracking
-// the last two numbers are the window position.
+// window(16) tells us we slowed down updating the display window's position by 16 times - causes the display jump around less (see [, ]).
+// x,y the current display window origin
+// ±n shows how wide an area is considered for autotracking.  To disable autotracking use the cursor keys (±0), to enable use (t or T).
 //
 // <, >        : limits the generation rate, < halves the rate and > doubles it (when limited you will see rate>xxx/s )
 //
@@ -38,9 +37,9 @@ const build_options = @import("build_options");
 //
 // [, ]        : how fast the autotracking position can move, bigger is slower
 //
-// cursor keys : allow manual positioning of the window using cursor keys (window(-autotracking generations) ...)
+// cursor keys : allow manual positioning of the window using cursor keys (±0)
 //
-// t,T         : if manual tracking enabled, disable, if disabled decrease area monitored for tracking (t) or increase area (T). 
+// t,T         : if autotracking is disabled enabled it, if enabled decrease area monitored for tracking (t) or increase area (T) (±n). 
 //
 // w           : toggle window position and tracking.  Often patterns have two interesting areas.  This allows switching between them.
 //
@@ -399,7 +398,7 @@ pub fn worker(t:u32) void {
                 processAlive(if (t>ts) t else t-1);           // ts is the thread that should run fastest and is called in the main thread
         }
         {                                                      
-            const f = fini.acquire();                         // work is now finished
+            const f = fini.acquire();                         // worker is now finished
             counter.* -= 1;
             f.release(); 
             done.signal();                                    // tell main to check counter
@@ -459,11 +458,8 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
     var _dx:i32 = 0;
     var _dy:i32 = 0;
     
-    var sub:u32 = 0b00001000_00000000_00000000;            // 2^20
-    if (tg>0)                                              
-        sub >>= @intCast(u5,tg)                            // reduce area considered when recording births & deaths for autotracking
-    else
-        sub >>= @intCast(u5,-tg);                          // tg is negitive here, so this is a left shift too.
+    var sub:u32 = 0b00001000_00000000_00000000;                     // 2^20
+    sub >>= @intCast(u5,std.math.absInt(tg)) catch unreachable;     // higher tg considers a smaller area.
         
     var k:u32 = 0;                                         // loop thru cells arraylist
     while (k < Threads) : (k+=1) {
