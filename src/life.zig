@@ -90,6 +90,7 @@ const build_options = @import("build_options");
 const pattern = build_options.pattern;          // get setting from build.zig
 const Threads = build_options.Threads;          // Threads to use from build.zig
 const staticSize = build_options.staticSize;    // static tiles are staticSize x staticSize.  Must be a power of 2.
+const chunkSize = build_options.chunkSize;      // number of cells to use when balancing alive arrays.
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
 //
@@ -366,6 +367,7 @@ var sc=[_]usize{0} ** Threads;
 threadlocal var iCells:u32 = undefined;                      // index to cells thead partition
 
 var cellsMax:u32 = 0;                                        // largest length of the cellLen subarrays
+var staticMax:u32 = 0;
 
 pub fn worker(t:u32) void {
     
@@ -417,7 +419,7 @@ pub fn processAlive(t:u32) void {
         
         var p = list.items[i];              // extract the point 
         
-        const x = p.x & m;                  // setup to cache !grid.active check
+        const x = p.x & m;                  // setup to cache grid.active check
         const y = p.y & m;                  // which gains us near 10%
         
         var isActive = grid.active[grid.index(p.x|m, p.y|m)];
@@ -456,23 +458,19 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
     var _iy:i32 = 0;
     var _dx:i32 = 0;
     var _dy:i32 = 0;    
- 
-    const cs:u32 = 256;
+        
+    var k:u32 = t;                      // thread to use for this partition (think of cells as 2D [Threads,n] with n different for each t)
+    var i:u32 = k;                      // index into cells, used to loop through a thread's cells for a partition
+    var l:u32 = 0;                      // number of partitions finished
+    var p:u32 = Threads*chunkSize;      // start of next partition [0, ...]
+    var h=[_]bool{true} ** Threads;     // false when partition finished (count l once...)
     
-    var i:u32 = 0;
-    var k:u32 = t;
-    var l:u32 = 0;
-    var p:u32 = 0;
-    var h=[_]bool{false} ** Threads;
-    while (l < Threads) : ({ p += Threads*cs; k = (k+1)%Threads; }) {
-        if (h[k]) continue;
-        i = p+k;
-        var j:u32 = 0;
+    while (l < Threads) : ({ k = (k+1)%Threads; i = p+k; p += Threads*chunkSize; }) {        
         //if (t==0) std.debug.print("{} {} {}: ",.{k, cellsLen[k], p});
-        while (j < cs) : ( {j+=1; i += Threads; }) {
+        while (h[k] and i < p) : (i += Threads) {
             if (i>=cellsLen[k]) {
                 l += 1;
-                h[k] = true;
+                h[k] = false;
                 break;
             }
             //if (t==0) std.debug.print("{} ",.{i});
@@ -550,10 +548,12 @@ pub fn main() !void {
     
     while (t<Threads) : ( t+=1 ) {
         alive[t] = std.ArrayList(Point).init(allocator);
-        defer alive[t].deinit();
-    }                                       // make sure to cleanup the arrayList(s)
-    //defer check.deinit();               
+        defer alive[t].deinit();                            // make sure to cleanup the arrayList(s)
+    }                                       
+                  
     defer cells.deinit();
+    try cells.ensureCapacity(Threads*chunkSize*2);
+    
     defer grid.deinit();                    // this also cleans up newgrid's storage
     
     const stdout = std.io.getStdOut().writer();
@@ -720,8 +720,8 @@ pub fn main() !void {
         
         try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
-        try cells.ensureCapacity((pop-static)*(9+Threads));  // too small causes wierd SIGSEGV errors as Threads increases - 'fun' debugging exercise...
-        try cells.resize(cells.capacity-1);                  // arrayList length to max
+        try cells.ensureCapacity(std.math.max((pop-static)*(9+Threads),chunkSize*Threads*2));  // too small causes wierd SIGSEGV errors as Threads increases
+        try cells.resize(cells.capacity-1);                                                     // arrayList length to max
         cellsMax = @intCast(u32,cells.capacity);
         
         // select screen buffer for next generation
@@ -791,12 +791,14 @@ pub fn main() !void {
         
         cellsMax = 0;
         static = 0;
+        staticMax = 0;
         
         // gather stats needed for display and sizing cells, check and alive[] arrayLists
         t = 0;                                          
         while (t<Threads) : ( t+=1 ) {  
             // _ = try screen.cursorAt(t+1,20).writer().print("{}",.{alive[t].items.len});
-            static += @intCast(u32,alive[t].items.len);            //checkMax = std.math.max(checkMax,checkLen[t]);
+            static += @intCast(u32,alive[t].items.len);                             
+            staticMax = std.math.max(staticMax,@intCast(u32,alive[t].items.len));
             cellsMax = std.math.max(cellsMax,cellsLen[t]);
         } 
         
@@ -865,7 +867,7 @@ pub fn main() !void {
             t = 0;                                                    
             while (t<Threads) : ( t+=1 ) {
                 sc[t]=alive[t].items.len;                                   // save static size for weight caculation for processAlive()
-                try alive[t].ensureCapacity(sc[t]+cellsMax/(Threads*2));    // make sure we have space in alive[t] arraylist(s)
+                try alive[t].ensureCapacity(std.math.max(staticMax+cellsMax/(Threads*2),chunkSize*2));      // make sure we have space in alive[t] arraylist(s)
             }                                                               // all processCells() calls should take similar times
             
             checking = true;                                            // tell worker to use processCells  
@@ -883,7 +885,7 @@ pub fn main() !void {
             f.release();
 
         } else {
-            try alive[0].ensureCapacity(alive[0].items.len+cellsMax/(Threads*2));
+            try alive[0].ensureCapacity(std.math.max(staticMax+cellsMax/(Threads*2),chunkSize*2));
             processCells(0);
         }
                                        

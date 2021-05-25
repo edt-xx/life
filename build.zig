@@ -26,6 +26,8 @@ pub fn build(b: *std.build.Builder) void {
     exe.addBuildOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
                                                         // If a pattern consists of almost all still lives, increase this value (try 8)
                                                         // If a pattern has very few still lives reduce this to 2 (no lower)
+    exe.addBuildOption(u32,"chunkSize",256);            // The number of cells to use when balancing alive arrays. Smaller gives better balanced arrays,
+                                                        // larger better performance up to a point.
     
     exe.addPackagePath("zbox","../zbox/src/box.zig");
     exe.linkSystemLibrary("pthread");
