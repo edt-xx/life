@@ -91,18 +91,20 @@ const pattern = build_options.pattern;          // get setting from build.zig
 const Threads = build_options.Threads;          // Threads to use from build.zig
 const staticSize = build_options.staticSize;    // static tiles are staticSize x staticSize.  Must be a power of 2.
 const chunkSize = build_options.chunkSize;      // number of cells to use when balancing alive arrays.
+const numChunks = build_options.numChunks;      // initial memory allocations for cells and alive[Threads] arrayLists
+const origin = build_options.origin;            // number is so important, it position cells for middle squares to work well
 
-// with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 threads)
+// with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 hyperthreads)
 //
 // Threads  gen         rate    cpu
-// 1        100,000     430s    15%
-// 2        100,000     350s    27%     using rmw in addCell and addNear seems to be the reason for this decrease
-// 3        100,000     460/s   37%
-// 4        100,000     500/s   46%
-// 5        100,100     550/s   57%
-// 6        100,000     605/s   67%
-// 7        100,000     660/s   75%
-// 8        100,000     595/s   68%     The update threads + display thread > CPU threads so we take longer in processCells/displayUqpdate
+// 1        100,000     440s    15%
+// 2        100,000     430s    27%     using rmw in addCell and addNear seems to be the reason for this
+// 3        100,000     540/s   37%
+// 4        100,000     580/s   47%
+// 5        100,100     640/s   57%
+// 6        100,000     710/s   67%
+// 7        100,000     830/s   75%
+// 8        100,000     740/s   75%     The update threads + display thread > CPU threads so we take longer in processCells/displayUqpdate
 //
 // operf with 6 threads reports (anything over 1%):
 //
@@ -224,85 +226,46 @@ const Hash = struct {
  
 // passing x, y instead of a point lets the compiler generate beter code (~25% faster) and speed counts here
  
-    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   // compiler 0.71 generates better code using left shift vs a bit mask.
-        return (( x*%x >> self.shift) ^                         // xor (^) is faster than | or + by about 5%
+    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   
+    //fn index(self:Hash, x:u32, y:u32) u32 {                     // compiler 0.71 generates better code using left shift vs a bit mask.
+        return (( x*%x >> self.shift) ^                         
                 ( y*%y >> self.shift << self.order)); 
-    } 
- 
-// find a Cell in the heap and increment its value, if not known, link it in and set its initial value
-    
-    fn addCell(self:*Hash, p:Point) void { 
-        
-        //const x = p.x;
-        //const y = p.y;
-
-        const h = &self.hash[self.index(p.x,p.y)];      // zig does not have 2D dynamic arrays so we fake it...
-        
-        var i:?*Cell = h.*;        // Points to the current Cell or null
-                       
-        while (true) {
-            
-            const head = i;
-            
-            while (i) |c| : (i = c.n) {
-                if (p.y == c.p.y and p.x == c.p.x) {
-                    if (Threads == 1) 
-                        c.v += 10
-                    else
-                        _ = @atomicRmw(u8, &c.v, .Add, 10, .Monotonic);
-                    return;
-                }
-            }
-            cells.items[iCells] = Cell{.p=p, .n=head, .v=10};     // cell not in heap, add it.  Note iCells is threadlocal.             
-            if (Threads == 1) {
-                h.* = &cells.items[iCells];              
-                iCells += Threads;
-                std.debug.assert(iCells < cellsMax);
-                return;
-            } else {
-                i = @cmpxchgWeak(?*Cell, h, head, &cells.items[iCells], .Release, .Monotonic) orelse {    // weak is maybe 1% faster                   
-                    iCells += Threads;                             // commit the Cell
-                    std.debug.assert(iCells < cellsMax);
-                    return;
-                };
-            }            
-        }
-    }
+    }  
     
 // find a Cell in the heap and increment its value, if not known, link it in and set its initial value
  
-    fn addNear(self:*Hash, p:Point) void { 
+    fn addCell(self:*Hash, p:Point, v:u8) void { 
         
-        //const x = p.x;                    // no faster using x & y
+        //const x = p.x;                                // no faster using x & y
         //const y = p.y;
         
         const h = &self.hash[self.index(p.x,p.y)];      // zig does not have 2D dynamic arrays so we fake it...
         
-        var i:?*Cell = h.*;        // Points to the current Cell or null
+        var i:?*Cell = h.*;                             // Points to the current Cell or null
             
         while (true) {
             
-            const head = i;
+            const head = i;                             // save head for linking & retries
         
             while (i) |c| : (i = c.n) {
-                if (p.y == c.p.y and p.x == c.p.x) {
+                if (p.y == c.p.y and p.x == c.p.x) {    // is this our target cell?
                     if (Threads == 1)
-                        c.v += 1
+                        c.v += v
                     else
-                        _ = @atomicRmw(u8,&c.v,.Add,1,.Monotonic); 
+                        _ = @atomicRmw(u8,&c.v,.Add,v,.Monotonic); 
                     return;
                 }
             }
-            cells.items[iCells] = Cell{.p=p, .n=head, .v=1};  // cell not in heap, add it.  Note iCells is threadlocal.
+            cells.items[iCells] = Cell{.p=p, .n=head, .v=v};  // cell not in heap, add it.  Note iCells is threadlocal.
             if (Threads == 1) {
                 h.* = &cells.items[iCells];
                 iCells += Threads;
-                std.debug.assert(iCells < cellsMax);
+                std.debug.assert(iCells < cells.capacity);
                 return;
             } else {
-                i = @cmpxchgWeak(?*Cell, h, head, &cells.items[iCells], .Release, .Monotonic) orelse {  // weak is maybe 1% faster                                
-                    iCells += Threads;
-                    std.debug.assert(iCells < cellsMax);
+                i = @cmpxchgStrong(?*Cell, h, head, &cells.items[iCells], .Release, .Monotonic) orelse {    // weak iis not measurabily faster                               
+                    iCells += Threads;                                                                      // commit the cell
+                    std.debug.assert(iCells < cells.capacity);
                     return;
                 };
             }
@@ -312,9 +275,6 @@ const Hash = struct {
 };
 
 var screen:*display.Buffer = undefined;
-
-const origin:u32 = 15_625_000;                              // about 1/256 of max int which has tested to work well (eg. fastest rates) 
-                                                            // some deep math probably explains why this number is so important...
 
 var cbx:u32 = undefined;                                    // starting center of activity 
 var cby:u32 = undefined;
@@ -341,7 +301,7 @@ var zn:usize = 0;                                           // generation of nex
 var b:u32 = 0;                                              // births and deaths
 var d:u32 = 0;    
     
-var gpa = (std.heap.GeneralPurposeAllocator(.{}){});
+var gpa = std.heap.GeneralPurposeAllocator(.{}) {};          
 const allocator = &gpa.allocator;
 
 var alive = [_]std.ArrayList(Point){undefined} ** Threads;   // alive cells, static cell stay in this list       
@@ -358,10 +318,10 @@ var fini:std.Thread.Mutex = std.Thread.Mutex{};              // prevent a thread
 var begin:std.Thread.Condition = std.Thread.Condition{};     // avoid busy waits when staring work
 var done:std.Thread.Condition = std.Thread.Condition{};      // avoid busy waits when waiting for work to finish
 var working:u32 = 1;                                         // active processing threads
-var displaying:u32 = 0;                                      // active display threads
+var displaying:u32 = 1;                                      // active display threads
 var checking:bool = false;                                   // controls what processing is done
 var going:bool = true;                                       // false when quitting
-var ts:u32 = 0;
+var ts:u32 = 0;                                              // use to find fastest processAlive
 var sc=[_]usize{0} ** Threads;
 
 threadlocal var iCells:u32 = undefined;                      // index to cells thead partition
@@ -384,9 +344,9 @@ pub fn worker(t:u32) void {
     while (going) {                                             
         {                                                      
             const w = trigger.acquire();                      // block waiting for work
-            counter.* += 1;
-            w.release();                                     
-            if ((t==0 and counter.*==1) or (t!=0 and counter.*==Threads)) begin.signal();  // tell main thread when workers are started
+            counter.* += 1;                                             // we need to start Thread-1 workers counting from 1
+            if (t==0 or (t!=0 and counter.*==Threads)) begin.signal();  // tell main thread when workers are started
+            w.release();
         } 
         if (going) {
             if (t==0)                                         // depending on the thread & checking, do the work
@@ -399,8 +359,8 @@ pub fn worker(t:u32) void {
         {                                                      
             const f = fini.acquire();                         // worker is now finished
             counter.* -= 1;
+            if (counter.*==0) done.signal();                  // tell main we are done, will only reach 0 if main thread is waiting
             f.release(); 
-            done.signal();                                    // tell main to check counter
         }
     }
 }
@@ -420,33 +380,33 @@ pub fn processAlive(t:u32) void {
         var p = list.items[i];              // extract the point 
         
         const x = p.x & m;                  // setup to cache grid.active check
-        const y = p.y & m;                  // which gains us near 10%
+        const y = p.y & m;                  // which gains us a few percent
         
         var isActive = grid.active[grid.index(p.x|m, p.y|m)];
                  
         if (isActive) {
-            grid.addCell(p);                // add the effect of the cell
+            grid.addCell(p,10);             // add the effect of the cell
             _ = list.swapRemove(i);         // this is why we use alive[] instead of the method used with check and cells...                          
         } else 
             i += 1;                         // keep static cells in alive list - they are stable                                      
 
         // add effect of the cell on its neighbours in an active areas
         
-        p.x +%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);   // doing check here
-                    p.y +%= 1;  if (y==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);   // saves ~2%
-        p.x -%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
-        p.x -%= 1;              if (x==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
-                    p.y -%= 1;  if (y==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
-                    p.y -%= 1;  if (y==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
-        p.x +%= 1;              if (x==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
-        p.x +%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addNear(p);
+        p.x +%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);   // doing check here
+                    p.y +%= 1;  if (y==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);   // saves ~2%
+        p.x -%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
+        p.x -%= 1;              if (x==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
+                    p.y -%= 1;  if (y==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
+                    p.y -%= 1;  if (y==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
+        p.x +%= 1;              if (x==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
+        p.x +%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
         
         // if cell is within the display window update the screen buffer
         
-        if (p.x >= xl and p.x <= xh and p.y > yl and p.y <= yh) {   // > yl ( vs >= yl ) avoids writing on the status line
+        if (p.x >= xl and p.x <= xh and p.y > yl and p.y <= yh) {   // p.y > yl to avoid writing on the status line
             screen.cellRef(p.y-yl,p.x-xl).char = 'O';
         }        
-    }                         
+    } 
     cellsLen[t] = iCells;                         // save the size of the cell partition for this thread
 }
     
@@ -459,11 +419,11 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
     var _dx:i32 = 0;
     var _dy:i32 = 0;    
         
-    var k:u32 = t;                      // thread to use for this partition (think of cells as 2D [Threads,n] with n different for each t)
-    var i:u32 = k;                      // index into cells, used to loop through a thread's cells for a partition
-    var l:u32 = 0;                      // number of partitions finished
-    var p:u32 = Threads*chunkSize;      // start of next partition [0, ...]
-    var h=[_]bool{true} ** Threads;     // false when partition finished (count l once...)
+    var k:u32 = t;                      // thread to use for this chunk (think of cells as 2D [Threads,m] with m different for each thread)
+    var i:u32 = k;                      // thread index into cells, used to loop through a chunk's cells for a given thread [k,i]
+    var l:u32 = 0;                      // number of chunks finished (m exceeded) for k(th) thread
+    var p:u32 = Threads*chunkSize;      // start of next chunk [0, Threads*chunkSize*n] where n is 0,1,2,...
+    var h=[_]bool{true} ** Threads;     // false when thread's partition is finished (count l once...)
     
     while (l < Threads) : ({ k = (k+1)%Threads; i = p+k; p += Threads*chunkSize; }) {        
         //if (t==0) std.debug.print("{} {} {}: ",.{k, cellsLen[k], p});
@@ -476,12 +436,13 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
             //if (t==0) std.debug.print("{} ",.{i});
             const c = cells.items[i];
             if (c.v < 10) {                           
-                if (c.v == 3) {                                         
-                    alive[t].appendAssumeCapacity(c.p);                 // birth so add to alive list & flag tile(s) as active
+                if (c.v == 3) { 
+                    std.debug.assert(alive[t].items.len < alive[t].capacity);
+                    alive[t].appendAssumeCapacity(c.p);                         // birth so add to alive list & flag tile(s) as active
                     newgrid.setActive(c.p);       
                     if (c.p.x > cbx) {
                         const tmp = c.p.x-cbx;
-                        if (tmp < sub and tmp > 0)                      // the tmp > 0 is so stable patterns do not drift with autotracking
+                        if (tmp < sub and tmp > 0)                              // the tmp > 0 is so stable patterns do not drift with autotracking
                             _ix +=  @intCast(i32,@clz(u32,tmp));
                     } else {
                         const tmp = cbx-c.p.x;
@@ -497,12 +458,13 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
                         if (tmp < sub and tmp > 0) 
                             _dy +=  @intCast(i32,@clz(u32,tmp));
                     }
-                    b += 1;                                             // can race, not critical 
+                    b += 1;                                                     // can race, not critical 
                 }
             } else
-                if (c.v == 12 or c.v == 13)                             // active cell that survives
-                    alive[t].appendAssumeCapacity(c.p)
-                else {
+                if (c.v == 12 or c.v == 13) {                                   // active cell that survives
+                    std.debug.assert(alive[t].items.len < alive[t].capacity);
+                    alive[t].appendAssumeCapacity(c.p);
+                } else {
                     newgrid.setActive(c.p);                             
                     if (c.p.x > cbx) {
                         const tmp = c.p.x-cbx;
@@ -522,7 +484,7 @@ pub fn processCells(t:u32) void {     // this only gets called in threaded mode 
                         if (tmp < sub and tmp > 0) 
                             _dy -=  @intCast(i32,@clz(u32,tmp));
                     }
-                    d += 1;                                             // can race, not critical 
+                    d += 1;                                                     // can race, not critical 
                 }
             
         }
@@ -544,15 +506,18 @@ pub fn ReturnOf(comptime func: anytype) type {
 
 pub fn main() !void {
     
-    var t:u32 = 0;                          // used for iterating up to Threads
+    //const targetPop = 500000;
+    
+    var t:u32 = 0;                         // used for iterating up to Threads
     
     while (t<Threads) : ( t+=1 ) {
         alive[t] = std.ArrayList(Point).init(allocator);
-        defer alive[t].deinit();                            // make sure to cleanup the arrayList(s)
-    }                                       
+        defer alive[t].deinit();                            
+    }                                      // make sure to cleanup the arrayList(s)
                   
     defer cells.deinit();
-    try cells.ensureCapacity(Threads*chunkSize*2);
+    try cells.ensureCapacity((8+Threads)*chunkSize*numChunks);
+    //try cells.ensureCapacity(targetPop*7/10+8*targetPop*3/10);
     
     defer grid.deinit();                    // this also cleans up newgrid's storage
     
@@ -595,7 +560,7 @@ pub fn main() !void {
                         if (count==0) count=1;
                         while (count>0):(count-=1) {
                             if (Threads != 1) {
-                                if (alive[t].items.len & 0x3 == 0) {
+                                if (alive[t].items.len & 0xf == 0) {
                                     t = if (t<Threads-1) t+1 else 0; 
                                 }
                             }
@@ -641,30 +606,37 @@ pub fn main() !void {
     t = 0;
     while (t<Threads) : ( t+=1 ) {
         for (alive[t].items) |p| { newgrid.setActive(p); }   // set all tiles active for the first generation
+        try alive[t].ensureCapacity(chunkSize*numChunks);
+        //try alive[t].ensureCapacity(targetPop/Threads);
     }
     b = @intCast(u32,pop);                              // everything is a birth at the start
     
     var ogen:u32 = 0;                                   // info for rate calculations
     var rtime:i64 = std.time.milliTimestamp()+1_000;  
     var rate:usize = 1;
-    var r10k:usize = 0;
-    var limit:usize = 65536;                             // optimistic rate limit
+    var rk:f32 = 0;
+    var pk:f32 = 0;
+    var r10k:f32 = 0;
+    var limit:usize = 65536;                            // optimistic rate limit
     var sRate:usize = 1;
     var sRate_ = sRate;
     var delay:usize = 0;
            
     var dw = disp_work.acquire();                       // block display update thread
     var w = work.acquire();                             // block processing/check update theads
+    
     t = 0;                                              
     while (t<Threads) : ( t+=1 ) {                      // start the, blocked, workers
         _ = try std.Thread.spawn(worker,t);         
-    }                                                
+    }
+    
     var f:ReturnOf(fini.acquire) = undefined;           // used to stop worker from registering a completion before we see the start
  
 // main event/life loop  
 
     // var nnn:usize = 0;
     // var ddd:i128 = 0;
+    // var xxx:usize = 1;
     
      while (try display.nextEvent()) |e| {
                   
@@ -677,7 +649,7 @@ pub fn main() !void {
             .left   => { cbx += inc; zn=gen; if (tg>0) tg = -tg; },
             .right  => { cbx -= inc; zn=gen; if (tg>0) tg = -tg; },
             .escape => { going=false; dw.release(); w.release();                                 // quit
-                         while (displaying>0) done.wait(&fini);  
+                         f = fini.acquire(); if (displaying>1) { displaying -= 1; done.wait(&fini); f.release(); }  
                          return; 
                        },                       
              .other => |data| { 
@@ -703,7 +675,7 @@ pub fn main() !void {
                                 if (eql(u8,"-",data)) s = if (s>0) s-1 else s;
                                 if (eql(u8,"q",data) or eql(u8,"Q",data)) { 
                                                         going=false; dw.release(); w.release();                                 // quit
-                                                        while (displaying>0) done.wait(&fini); 
+                                                        f = fini.acquire(); if (displaying>1) { displaying -= 1; done.wait(&fini); f.release(); } 
                                                         return; 
                                                     }     
                              },
@@ -720,9 +692,9 @@ pub fn main() !void {
         
         try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
-        try cells.ensureCapacity(std.math.max((pop-static)*(9+Threads),chunkSize*Threads*2));  // too small causes wierd SIGSEGV errors as Threads increases
-        try cells.resize(cells.capacity-1);                                                     // arrayList length to max
-        cellsMax = @intCast(u32,cells.capacity);
+        //cells.clearRetainingCapacity();                    // will help when resizing an empty arrayList avoids a mem.copy
+        try cells.ensureCapacity((pop-static)*(8+Threads));  
+        cells.expandToCapacity();                            // arrayList length to max
         
         // select screen buffer for next generation
         if (gen&1 == 0) 
@@ -760,15 +732,14 @@ pub fn main() !void {
         // nnn += 1;
         // _ = try screen.cursorAt(3,0).writer().print("release working {}",.{nnn});
         
-        
         if (Threads > 1) {
             
-            var tmp:usize = std.math.maxInt(usize);
+            var tmp:usize = std.math.maxInt(usize);                    
             t = 0;
             while (t<Threads) : ( t+=1 ) {                             // guess the partition that will process fastest for the local thread
-                sc[t]+=8*(alive[t].items.len-sc[t]);                   // cells that need to be evaluated take longer than static cells 
-                if (sc[t]<tmp) {
-                    tmp = sc[t];
+                sc[t]+=(alive[t].items.len-sc[t])*8;                   // cells that need to be evaluated take longer than static cells 
+                if (sc[t]<tmp) {                                       
+                    tmp = sc[t];                                       // waits with 7:88%, 8:90%, 9:85% on p95m for 350k gens
                     ts = t;
                 }
             }
@@ -782,8 +753,10 @@ pub fn main() !void {
             processAlive(ts);                                          // Use our existing thread
         
             f = fini.acquire();
-            while (working > 1) {                                      // wait for all worker threads to finish
+            if (working > 1) {                                         // wait for all worker threads to finish
+                working -= 1;                                          // only signal if we are waiting
                 done.wait(&fini);
+                working += 1;
             }
             f.release();
         } else
@@ -807,8 +780,10 @@ pub fn main() !void {
         if (gen%std.math.shl(u32,1,s)==0) {
             //const tmp:i128 = std.time.nanoTimestamp();
             f = fini.acquire();
-            while (displaying > 0) {                                  // wait for display worker thread, usually its done before we get here 
+            if (displaying > 1) {                                  // wait for display worker thread, usually its done before we get here 
+                displaying -= 1;
                 done.wait(&fini);
+                displaying += 1;
                 // dt += 1;
             }
             f.release();
@@ -820,11 +795,23 @@ pub fn main() !void {
             rtime = std.time.milliTimestamp()+1_000;
             rate = gen-ogen;
             ogen = gen;
-            const a = rate*1_000_000_000/(if (500_000_000>delay*rate) 1_000_000_000-delay*rate else 1);  // rate without delay (if any)
-            if (a>limit)
+
+            const a = rate*1_000_000_000/(if (500_000_000>delay*rate) 1_000_000_000-delay*rate else 1);     // rate without delay (if any)
+            if (a>limit)                                                                                    // if allows "a" to converge on limit
                 delay = 1_000_000_000/limit-1_000_000_000/a
             else
                 delay = 0;
+            
+            const rr = @intToFloat(f32,(rate*1_000_000_000)/(1_000_000_000-delay*rate));                    // first order kalman predictor
+            if (rk!=0) {            
+                const kk = pk/(pk+0.4);                     // kalman gain                 
+                rk += kk*(rr-rk);                           // rate prediction
+                pk = (1-kk)*pk + 0.1;                       // error covariance
+            } else {
+                rk = rr;                                    // initial prediction
+                pk = rr*rr;                                 // and error 
+            }
+
         }
         
 // show the results for this generation (y,x coords)
@@ -832,10 +819,10 @@ pub fn main() !void {
         { 
             const tt = if (delay>0) ">" else " ";                                                       // needed due compiler buglet with if in print 
             const gg = if (tg<0) 0 else @as(i32,0b00001000_00000000_00000000) >> @intCast(u5,tg);
-            r10k = if (gen%10000 == 0) rate else r10k;
+            r10k = if (gen%10000 == 0) rk else r10k; 
         
-            _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{} ±{}  {}", .{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, sRate, @intCast(i64,xl)-origin, @intCast(i64,yl)-origin, gg, r10k});
-        }
+            _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{} ±{}  {d:<5.0}", .{gen, std.math.shl(u32,1,s), pop, pop-static, b, d, tt, rate, grid.order, cellsMax, sRate, @intCast(i64,xl)-origin, @intCast(i64,yl)-origin, gg, r10k});
+        }    
         
         //_ = try screen.cursorAt(1,0).writer().print("debug {} {} {}, {} {} {}, {} {} {}, {} {}",.{alive[0].items.len,cellsLen[0]/3,checkLen[0]/3,alive[1].items.len,cellsLen[1]/3,checkLen[1]/3,alive[2].items.len,cellsLen[2]/3,checkLen[2]/3,bbb,ddd});
         
@@ -866,10 +853,10 @@ pub fn main() !void {
 
             t = 0;                                                    
             while (t<Threads) : ( t+=1 ) {
-                sc[t]=alive[t].items.len;                                   // save static size for weight caculation for processAlive()
-                try alive[t].ensureCapacity(std.math.max(staticMax+cellsMax/(Threads*2),chunkSize*2));      // make sure we have space in alive[t] arraylist(s)
-            }                                                               // all processCells() calls should take similar times
-            
+                sc[t]=alive[t].items.len;                                       // save static size for processAlive(ts) weights                                                      
+                try alive[t].ensureCapacity(staticMax+cellsMax/Threads/2);      // make sure we have space in alive[t] arraylist(s)                            
+            }                                                               
+                                                                        // all processCells() calls should take similar times
             checking = true;                                            // tell worker to use processCells  
             
             f = fini.acquire();                                         // wait for all worker threads to start
@@ -879,13 +866,15 @@ pub fn main() !void {
             processCells(ts);                                           // use this thread too
             
             f = fini.acquire();                                         // wait for all worker threads to finish
-            while (working > 1) {
+            if (working > 1) {
+                working -= 1;
                 done.wait(&fini);
+                working += 1;
             }
             f.release();
 
         } else {
-            try alive[0].ensureCapacity(std.math.max(staticMax+cellsMax/(Threads*2),chunkSize*2));
+            try alive[0].ensureCapacity(staticMax+cellsMax/Threads/2);
             processCells(0);
         }
                                        

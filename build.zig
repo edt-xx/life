@@ -13,7 +13,7 @@ pub fn build(b: *std.build.Builder) void {
     
     const exe = b.addExecutable("life", "src/life.zig");    
     
-    exe.addBuildOption([]const u8,"pattern",p_1_700_000m);
+    exe.addBuildOption([]const u8,"pattern",p_95_206_595m);
     
 //  p_95_206_595m       // pattern used in benchmarking (corder ship, non symetric, terminating)
 //  p_19_659_494m       // symetric quasi-crystal coorder ship reaction.
@@ -22,21 +22,30 @@ pub fn build(b: *std.build.Builder) void {
 //  p_max               // fastest growth possible
 //  p_52513m            // longest running mesuthelah currently known (march 2021)
     
-    exe.addBuildOption(u32,"Threads",3);                // Threads excluding display update thread - we always use a thread for the display update
+    
+    //exe.addBuildOption(u32,"Threads",7);              // Threads excluding display update thread - we also use a thread for display updates.  
+    
+    exe.addBuildOption(u32,"Threads",@intCast(u32,std.math.max(2, std.Thread.cpuCount() catch 2))-1);    // highest performance                                                 
+                                                    
     exe.addBuildOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
                                                         // If a pattern consists of almost all still lives, increase this value (try 8)
-                                                        // If a pattern has very few still lives reduce this to 2 (no lower)
     exe.addBuildOption(u32,"chunkSize",256);            // The number of cells to use when balancing alive arrays. Smaller gives better balanced arrays,
-                                                        // larger better performance up to a point.
-    
+                                                        // larger better performance up to a point (testing show 256 is a good choise).
+    exe.addBuildOption(u32,"numChunks",4);              // initial memory to allocation.  Optimally, the starting population should be less than
+                                                        // Threads*chunkSize*NumChunks
+    exe.addBuildOption(u32,"origin",7_500_000);         // This number is important, it position cells for middle squares to work well.  We combine the high
+                                                        // bits of the low 32bits of X & Y values squared to index cells.  A number that, when squared, has its 
+                                                        // middle bits in those high bits works better (between 2^22 and 2^24 is ideal, up to 2^26 work okay).
+                                                        // Use bigger origins when following the patterns for more than 2*origin generations (try 15m or 30m).
+                                                        
     exe.addPackagePath("zbox","../zbox/src/box.zig");
     exe.linkSystemLibrary("pthread");
     exe.setTarget(target);                              // use the best options for the cpu we are building on
-    //exe.setTarget(.{                                    // generic x86_64 - about 8% slower on my box
+    //exe.setTarget(.{                                  // generic x86_64 - about 8% slower on my box
     //    .cpu_arch = .x86_64,
     //    .os_tag = .linux,
     //    .abi = .gnu,
-    //    .cpu_model = .baseline,                         // .baseline encompasses more old cpus
+    //    .cpu_model = .baseline,                       // .baseline encompasses more old cpus
     //});
     exe.setBuildMode(mode);
   //exe.setBuildMode(std.builtin.Mode.ReleaseFast);     // to hard code ReleaseFast/ReleaseSafe etc
