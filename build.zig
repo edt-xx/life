@@ -13,7 +13,7 @@ pub fn build(b: *std.build.Builder) void {
     
     const exe = b.addExecutable("life", "src/life.zig");    
     
-    exe.addBuildOption([]const u8,"pattern",p_95_206_595m);
+    exe.addBuildOption([]const u8,"pattern",p_1_700_000m);
     
 //  p_95_206_595m       // pattern used in benchmarking (corder ship, non symetric, terminating)
 //  p_19_659_494m       // symetric quasi-crystal coorder ship reaction.
@@ -23,9 +23,9 @@ pub fn build(b: *std.build.Builder) void {
 //  p_52513m            // longest running mesuthelah currently known (march 2021)
     
     
-    //exe.addBuildOption(u32,"Threads",7);              // Threads excluding display update thread - we also use a thread for display updates.  
+    exe.addBuildOption(u32,"Threads",3);                // Threads excluding display update thread - we also use a thread for display updates.  
     
-    exe.addBuildOption(u32,"Threads",@intCast(u32,std.math.max(2, std.Thread.cpuCount() catch 2))-1);    // highest performance                                                 
+    //exe.addBuildOption(u32,"Threads",@intCast(u32,std.math.max(2, std.Thread.cpuCount() catch 2))-1);    // highest performance                                                 
                                                     
     exe.addBuildOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
                                                         // If a pattern consists of almost all still lives, increase this value (try 8)
