@@ -126,14 +126,82 @@ fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn
     std.builtin.default_panic(msg, error_return_trace);
 }
 
-const Point = struct {          // cell coords
-    x: coord,
-    y: coord,
+const Point = packed struct {   // cell coords (packed so we can bitCast a Point to a u64)
+    x: coord align(8),
+    y: coord,    
 };
 
-const Cell = struct {    
+const Area = struct {
+    p: Point,               // starting center point
+    x: coord,               // x in 'static' area
+    y: coord,               // y in 'static' area
+    f: bool,                // is area active?
+    
+    const m = staticSize-1;
+    
+    const itr = [_]@TypeOf(pxa_0){pxa_0, pya_1, pxs_2, pxs_3, pys_4, pys_5, pxa_6, pxa_7};
+    
+    const Self=@This();
+    
+    fn center(self: *Self) bool {
+        self.x = self.p.x&m;
+        self.y = self.p.y&m;
+        self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    }
+    
+    fn pxa_0(self: *Self) bool {        
+        self.p.x +%= 1;
+        if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    } 
+    
+    fn pya_1(self: *Self) bool { 
+        self.p.y +%= 1;
+        if (self.y==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    }    
+
+    fn pxs_2(self: *Self) bool { 
+        self.p.x -%= 1;
+        if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    }    
+    
+    fn pxs_3(self: *Self) bool {
+        self.p.x -%= 1;
+        if (self.x==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    }    
+    
+    fn pys_4(self: *Self) bool {
+        self.p.y -%= 1;
+        if (self.y==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    }  
+    
+    fn pys_5(self: *Self) bool {
+        self.p.y -%= 1;
+        if (self.y==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    }  
+    
+    fn pxa_6(self: *Self) bool { 
+        self.p.x +%= 1; 
+        if (self.x==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    } 
+    
+    fn pxa_7(self: *Self) bool {
+        self.p.x +%= 1;
+        if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        return self.f;
+    } 
+};
+
+const Cell = packed struct {    
+    p: Point align(16),         // point for this cell
     n: maxIndex,                // pointer for the next cell in the same hash chain
-    p: Point,                   // point for this cell
     v: u8,                      // cells value
 };
 
@@ -227,8 +295,8 @@ const Hash = struct {
 // high bits from the 32bits to generate the index.  
  
 // passing x, y instead of a point lets the compiler generate beter code (~25% faster) and speed counts here
- 
-    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   
+
+    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {
         return (( x*%x >> self.shift) ^                         
                 ( y*%y >> self.shift << self.order)); 
     }  
@@ -247,7 +315,8 @@ const Hash = struct {
         
             while (i!=0) {                              // using index(s) is faster (and smaller) than using pointers
                 const c = &cells.items[i];              
-                if (p.y == c.p.y and p.x == c.p.x) {    // is this our target cell?
+                //if (p.y == c.p.y and p.x == c.p.x) {    
+                if (@bitCast(u64,p) == @bitCast(u64,c.p)) {     // is this our target cell? (@bitCast(u64... is faster)
                     if (Threads == 1)
                         c.v += v                        // add value to existing cell
                     else
@@ -358,49 +427,40 @@ pub fn worker(t:maxIndex) void {                            // worker threads fo
     }
 }
 
-pub fn processAlive(t:maxIndex) void {      // process cells in alive[t] adding to cells 
+pub fn processAlive(t:maxIndex) void {          // process cells in alive[t] adding to cells 
+                                                                                                  
+    const list = &alive[t];                     // extacting x and y and using them does not add more speed here
     
-    const m = staticSize-1;                 // staticSize must a power of 2, so -1 is a mask of ones
-    
-    var list = &alive[t];                   // extacting x and y and using them does not add more speed here
-    
-    iCells = if (t!=0) t else Threads;      // threadlocal vars, we trade memory for thread safey and speed
-                                            // and treat the arrayList as dynamic arrays
+    iCells = if (t!=0) t else Threads;          // threadlocal vars, we trade memory for thread safey and speed
+                                                // and treat the arrayList as dynamic arrays
     var i:u32 = 0;
 
-    while (i < list.items.len) {            // add cells to the hash to enable next generation calculation
+    while (i < list.items.len) {                // add cells to the hash to enable next generation calculation
+            
+        var a = Area{ .p=list.items[i], .x=undefined, .y=undefined, .f=undefined };  // add point to surround
         
-        var p = list.items[i];              // extract the point 
+        // if cell is within the display window update the screen buffer        
+        if (a.p.y > yl and a.p.y <= yh and a.p.x >= xl and a.p.x <= xh) {   // p.y > yl to avoid writing on the status line
+            screen.cellRef(a.p.y-yl, a.p.x-xl).char = 'O';
+        }
+                           
+        if (a.center()) {                                   // finish Area setup, returning active flag
+            _ = list.swapRemove(i);                         // this is why we use alive[] instead of the method used with check and cells... 
+            grid.addCell(a.p,10);                           // add the effect of the cell
+        } else {
+            i += 1;                                                         // keep static cells in alive list - they are stable 
+            if (a.x>0 and a.x<Area.m and a.y>0 and a.y<Area.m)        
+               continue;                                                    // no effect if in center of static area
+        }
+            
+        // add effect of the cell on its neighbours in an active areas 
         
-        const x = p.x & m;                  // setup to cache grid.active check
-        const y = p.y & m;                  // which gains us a few percent
-        
-        var isActive = grid.active[grid.index(p.x|m, p.y|m)];
-                 
-        if (isActive) {
-            grid.addCell(p,10);             // add the effect of the cell
-            _ = list.swapRemove(i);         // this is why we use alive[] instead of the method used with check and cells...                          
-        } else 
-            i += 1;                         // keep static cells in alive list - they are stable                                      
-
-        // add effect of the cell on its neighbours in an active areas
-        
-        p.x +%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);   // doing check here
-                    p.y +%= 1;  if (y==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);   // saves ~2%
-        p.x -%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
-        p.x -%= 1;              if (x==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
-                    p.y -%= 1;  if (y==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
-                    p.y -%= 1;  if (y==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
-        p.x +%= 1;              if (x==0) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
-        p.x +%= 1;              if (x==m) isActive = grid.active[grid.index(p.x|m, p.y|m)]; if (isActive) grid.addCell(p,1);
-        
-        // if cell is within the display window update the screen buffer
-        
-        if (p.y > yl and p.y <= yh and p.x >= xl and p.x <= xh) {   // p.y > yl to avoid writing on the status line
-            screen.cellRef(p.y-yl,p.x-xl).char = 'O';
-        }        
+        comptime var j = 0;                             // comptime is atleast 12% faster
+        inline while (j<8) : (j+=1) {
+            if (Area.itr[j](&a)) grid.addCell(a.p,1);
+        }
     } 
-    cellsLen[t] = iCells;                         // save the size of the cell partition for this thread
+    cellsLen[t] = iCells;                               // save the size of the cell partition for this thread
 }
     
 pub fn processCells(t:maxIndex) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
@@ -428,7 +488,6 @@ pub fn processCells(t:maxIndex) void {     // this only gets called in threaded 
                 h[k] = false;
                 break;
             }
-            //if (t==0) std.debug.print("{} ",.{i});
             const c = cells.items[i];
             if (c.v < 10) {                           
                 if (c.v == 3) { 
@@ -522,6 +581,8 @@ pub fn main() !void {
     try display.cursorHide();               // hide the cursor
     defer display.cursorShow() catch {};
     errdefer display.cursorShow() catch {};
+    
+    try display.clear();                    // be sure to start with a clean display
  
     var size = try display.size();
  
@@ -532,7 +593,6 @@ pub fn main() !void {
     defer s0.deinit();
     var s1 = try display.Buffer.init(allocator, size.height, size.width);
     defer s1.deinit(); 
-    screen = &s0;
    
     var gen: u32 = 0;           // generation
     var pop:u32 = 0;            // poputlation
@@ -574,10 +634,10 @@ pub fn main() !void {
     
     cbx = (xh-origin)/2+origin;                     // starting center of activity 
     cby = (yh-origin)/2+origin;
-    cbx_ = cbx;                                     // and the alternate
+    cbx_ = cbx;                                     // and the alternate (for w command)
     cby_ = cby;
     
-    xl = cbx - cols/2;                              // starting window
+    xl = cbx - cols/2;                              // starting display window
     xh = xl + cols - 1;  
     yl = cby - rows/2; 
     yh = yl + rows - 1;
@@ -594,8 +654,7 @@ pub fn main() !void {
     
     newgrid = try Hash.init(9*pop);                 // set the order for the generation
     
-    grid.order = 0;                                 // this forces grid.assign & newgrid.takeStatic to reallocate storage for hash and static.
-    
+    grid.order = 0;                                 // this forces grid.assign & newgrid.takeStatic to reallocate storage for hash and static.    
     try newgrid.takeStatic(&grid);
     
     t = 0;
@@ -772,19 +831,19 @@ pub fn main() !void {
             if (pushing==null and gen%std.math.shl(u32,1,s)==0) {     // can we display and do we want to?
             
                 const dw = disp.acquire();
-                pushing = screen;               // update with new buffer to push
-                push.signal();                  // signal display pushing thread to start
+                pushing = screen;                   // update with new buffer to push
+                push.signal();                      // signal display pushing thread to start
                 dw.release();
                 
-                if (screen == &s0)              // switch to alternate buffer for next display cycle
+                if (screen == &s0)                  // switch to alternate buffer for next display cycle
                     screen = &s1
                 else 
                     screen = &s0;
+                    
+                if (gen == 0)                       // briefly show the starting pattern
+                    std.time.sleep(1_000_000_000);                          
             }
-  
-            if (gen == 1)
-                std.time.sleep(1_000_000_000);      // briefly show the starting pattern
-                
+
             gen += 1;
                            
             if (tg<0) {                             // switch focus of center of activity as per user or autotracking
@@ -819,10 +878,10 @@ pub fn main() !void {
             
             // clear the internal screen display buffer
             yl_ = yl;                                               // save yl incase we set it to maxInt
-            if (gen%std.math.shl(u32,1,s)==0 and screen!=pushing)
+            if (gen%std.math.shl(u32,1,s)==0)
                 screen.clear()                                      // prep buffer
             else 
-                yl = std.math.maxInt(u32);                          // ignore buffer
+                yl = std.math.maxInt(u32);                          // ignore buffer (add nothing to screen buffer)
                 
             // higher rates yield smaller increments 
             inc = std.math.max(@clz(@TypeOf(rate),rate+1)-16,1);    // move autotracking faster with lower rates
@@ -836,9 +895,9 @@ pub fn main() !void {
             working += 1;
         }
         f.release();
-        
+                
         if (delay>0)                                                // delay to limit the rate
-                std.time.sleep(delay);                       
+            std.time.sleep(delay);                       
                             
         // adjust cbx for an eventually move of the display window.
         if (tg>0) {
