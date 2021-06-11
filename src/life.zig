@@ -128,7 +128,7 @@ fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn
 
 const Point = packed struct {   // cell coords (packed so we can bitCast a Point to a u64)
     x: coord align(8),
-    y: coord,    
+    y: coord,
 };
 
 const Area = struct {
@@ -139,7 +139,7 @@ const Area = struct {
     
     const m = staticSize-1;
     
-    const itr = [_]@TypeOf(pxa_0){pxa_0, pya_1, pxs_2, pxs_3, pys_4, pys_5, pxa_6, pxa_7};
+    const itr = [_]@TypeOf(xa_0){xa_0, ya_1, xs_2, xs_3, ys_4, ys_5, xa_6, xa_7};
     
     const Self=@This();
     
@@ -150,49 +150,49 @@ const Area = struct {
         return self.f;
     }
     
-    fn pxa_0(self: *Self) bool {        
+    fn xa_0(self: *Self) bool {        
         self.p.x +%= 1;
         if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
         return self.f;
     } 
     
-    fn pya_1(self: *Self) bool { 
+    fn ya_1(self: *Self) bool { 
         self.p.y +%= 1;
-        if (self.y==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
+        if (self.y==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)]; 
         return self.f;
     }    
 
-    fn pxs_2(self: *Self) bool { 
+    fn xs_2(self: *Self) bool { 
         self.p.x -%= 1;
         if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
         return self.f;
     }    
     
-    fn pxs_3(self: *Self) bool {
+    fn xs_3(self: *Self) bool {
         self.p.x -%= 1;
         if (self.x==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
         return self.f;
     }    
     
-    fn pys_4(self: *Self) bool {
+    fn ys_4(self: *Self) bool {
         self.p.y -%= 1;
         if (self.y==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
         return self.f;
     }  
     
-    fn pys_5(self: *Self) bool {
+    fn ys_5(self: *Self) bool {
         self.p.y -%= 1;
         if (self.y==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
         return self.f;
     }  
     
-    fn pxa_6(self: *Self) bool { 
+    fn xa_6(self: *Self) bool { 
         self.p.x +%= 1; 
         if (self.x==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
         return self.f;
     } 
     
-    fn pxa_7(self: *Self) bool {
+    fn xa_7(self: *Self) bool {
         self.p.x +%= 1;
         if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
         return self.f;
@@ -211,25 +211,22 @@ const Hash = struct {
     hash: []maxIndex,           // pointers into the cells arraylist (2^order x 2^order hash table)
     active: []bool,             // flag if 4x4 area is static
     order:u5,                   // hash size is 2^(order+order), u5 for << and >> with usize and a var
-    shift:u5,                   // avoid a subtraction in index       
+    shift:u5,                   // avoid a subtraction in index 
        
     fn init(size:usize) !Hash {
                     
-        var self:Hash = undefined;
-        
 // log2 of the population from the last iteration.  The ammount of memory used is a tradeoff
 // between the length of the hash/heap chains and the time taken to clear the hash array.
         
         if (size < theSize/2 or size > theSize)             // reduce order bouncing and (re)allocates
             theSize = size;
         
-        //const o = @intCast(u5,std.math.clamp(std.math.log2(theSize)/2+1, 6, 12));
         const o = @intCast(u5,std.math.clamp(31-@clz(@TypeOf(theSize),theSize+1)/2+1, 6, 12));
         
         return Hash{ .hash=undefined, 
                      .active=undefined,
                      .order = o, 
-                     .shift = @intCast(u5,31-o+1),          // 32-o fails with a comiplier error...          
+                     .shift = @intCast(u5,31-o+1),          // 32-o fails with a comiplier error...  
                    };        
     }
     
@@ -279,8 +276,8 @@ const Hash = struct {
 
          self.active[self.index(t.x, t.y)] = true;
          
-         if (x==m         ) self.active[self.index(t.x+%i, t.y   )] = true;
-         if (x==m and y==m) self.active[self.index(t.x+%i, t.y+%i)] = true;
+         if (x==m         ) self.active[self.index(t.x+%i, t.y   )] = true;     // this is faster than iterating around the point
+         if (x==m and y==m) self.active[self.index(t.x+%i, t.y+%i)] = true;     // as we do with the Area struct
          if (         y==m) self.active[self.index(t.x   , t.y+%i)] = true;
          if (x==0 and y==m) self.active[self.index(t.x-%i, t.y+%i)] = true;
          if (x==0         ) self.active[self.index(t.x-%i, t.y   )] = true;
@@ -296,7 +293,7 @@ const Hash = struct {
  
 // passing x, y instead of a point lets the compiler generate beter code (~25% faster) and speed counts here
 
-    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {
+    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   // this faster than bitCast a point to u64 and hashing with that value
         return (( x*%x >> self.shift) ^                         
                 ( y*%y >> self.shift << self.order)); 
     }  
@@ -305,7 +302,7 @@ const Hash = struct {
  
     fn addCell(self:*Hash, p:Point, v:u8) callconv(.Inline) void { 
         
-        const h = &self.hash[self.index(p.x,p.y)];      // zig does not have 2D dynamic arrays so we fake it... (using const x=p.x etc is no faster)
+        const h = &self.hash[self.index(p.x, p.y)];     // zig does not have 2D dynamic arrays so we fake it... (using const x=p.x etc is no faster)
         
         var i:maxIndex = h.*;                           // index of the current Cell, 0 implies EOL
             
@@ -314,8 +311,7 @@ const Hash = struct {
             const head = i;                             // save the current index at the head of the hash chain (h), for linking & retries
         
             while (i!=0) {                              // using index(s) is faster (and smaller) than using pointers
-                const c = &cells.items[i];              
-                //if (p.y == c.p.y and p.x == c.p.x) {    
+                const c = &cells.items[i];                 
                 if (@bitCast(u64,p) == @bitCast(u64,c.p)) {     // is this our target cell? (@bitCast(u64... is faster)
                     if (Threads == 1)
                         c.v += v                        // add value to existing cell
@@ -445,22 +441,23 @@ pub fn processAlive(t:maxIndex) void {          // process cells in alive[t] add
         }
                            
         if (a.center()) {                                   // finish Area setup, returning active flag
-            _ = list.swapRemove(i);                         // this is why we use alive[] instead of the method used with check and cells... 
+            list.items[i] = list.items[list.items.len-1];
+            list.items.len -= 1;                            // swap and remove last item (optimized list.swapRemove(i); )
             grid.addCell(a.p,10);                           // add the effect of the cell
         } else {
-            i += 1;                                                         // keep static cells in alive list - they are stable 
-            if (a.x>0 and a.x<Area.m and a.y>0 and a.y<Area.m)        
-               continue;                                                    // no effect if in center of static area
+            i += 1;                                                     // keep static cells in alive list - they are stable 
+            if (a.x > 0 and a.x < Area.m and a.y > 0 and a.y < Area.m)        
+               continue;                                                // no effect if in center of static area
         }
             
         // add effect of the cell on its neighbours in an active areas 
-        
-        comptime var j = 0;                             // comptime is atleast 12% faster
+             
+        comptime var j = 0;                                 // comptime is atleast 12% faster
         inline while (j<8) : (j+=1) {
             if (Area.itr[j](&a)) grid.addCell(a.p,1);
         }
     } 
-    cellsLen[t] = iCells;                               // save the size of the cell partition for this thread
+    cellsLen[t] = iCells;                                   // save the size of the cell partition for this thread
 }
     
 pub fn processCells(t:maxIndex) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
