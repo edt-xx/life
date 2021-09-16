@@ -11,9 +11,12 @@ pub fn build(b: *std.build.Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
     
-    const exe = b.addExecutable("life", "src/life.zig");    
+    const exe = b.addExecutable("life", "src/life.zig");  
     
-    exe.addBuildOption([]const u8,"pattern",p_1_700_000m);
+    const exe_opt = b.addOptions();
+    exe.addOptions("build_options", exe_opt);
+    
+    exe_opt.addOption([]const u8,"pattern",p_95_206_595m);
     
 //  p_95_206_595m       // pattern used in benchmarking (corder ship, non symetric, terminating)
 //  p_19_659_494m       // symetric quasi-crystal coorder ship reaction.
@@ -23,23 +26,29 @@ pub fn build(b: *std.build.Builder) void {
 //  p_52513m            // longest running mesuthelah currently known (march 2021)
     
     
-    exe.addBuildOption(u32,"Threads",3);                // Threads excluding display update thread - we also use a thread for display updates.  
+    exe_opt.addOption(u32,"Threads",3);                // Threads excluding display update thread - we also use a thread for display updates.  
     
-    //exe.addBuildOption(u32,"Threads",@intCast(u32,std.math.max(2, std.Thread.cpuCount() catch 2))-1);    // highest performance                                                 
+    //exe_opt.addOption(u32,"Threads",@intCast(u32,std.math.max(2, std.Thread.getCpuCount() catch 2))-1);    // highest performance                                                 
                                                     
-    exe.addBuildOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
+    exe_opt.addOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
                                                         // If a pattern consists of almost all still lives, increase this value (try 8)
-    exe.addBuildOption(u32,"chunkSize",256);            // The number of cells to use when balancing alive arrays. Smaller gives better balanced arrays,
-                                                        // larger better performance up to a point (testing show 256 is a good choise).
-    exe.addBuildOption(u32,"numChunks",4);              // initial memory to allocation.  Optimally, the starting population should be less than
+    exe_opt.addOption(u32,"chunkSize",255);            // The number of cells to use when balancing alive arrays. Smaller gives better balanced arrays,
+                                                        // larger better performance up to a point (testing shows 255 is a good choise).
+    exe_opt.addOption(u32,"numChunks",4);              // initial memory to allocation.  Optimally, the starting population should be less than
                                                         // Threads*chunkSize*NumChunks
-    exe.addBuildOption(u32,"origin",7_500_000);         // This number is important, it position cells for middle squares to work well.  We combine the high
+    exe_opt.addOption(u32,"origin",7_500_000);         // This number is important, it position cells for middle squares to work well.  We combine the high
                                                         // bits of the low 32bits of X & Y values squared to index cells.  A number that, when squared, has its 
                                                         // middle bits in those high bits works better (between 2^22 and 2^24 is ideal, up to 2^26 work okay).
                                                         // Use bigger origins when following the patterns for more than 2*origin generations (try 15m or 30m).
                                                         
     exe.addPackagePath("zbox","../zbox/src/box.zig");
-    exe.linkSystemLibrary("pthread");
+    //exe.addPackagePath("tracy","../zig-tracy/src/lib.zig");
+    //exe.addIncludeDir("../zig-tracy/.zigmod/deps/v/git/github.com/wolfpld/tracy/tag-v0.7.8");
+    //exe.addCSourceFile("../zig-tracy/.zigmod/deps/v/git/github.com/wolfpld/tracy/tag-v0.7.8/TracyClient.cpp", &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined" });       
+    //exe.linkSystemLibrary("c++");
+
+    //exe.linkSystemLibrary("pthread");
+    //exe.linkSystemLibrary("c");                       // exe.linkLibC() to use c_allocator.  looks like we are not allocator limited - its no faster...
     exe.setTarget(target);                              // use the best options for the cpu we are building on
     //exe.setTarget(.{                                  // generic x86_64 - about 8% slower on my box
     //    .cpu_arch = .x86_64,
@@ -48,6 +57,7 @@ pub fn build(b: *std.build.Builder) void {
     //    .cpu_model = .baseline,                       // .baseline encompasses more old cpus
     //});
     exe.setBuildMode(mode);
+  //exe.pie = true;
   //exe.setBuildMode(std.builtin.Mode.ReleaseFast);     // to hard code ReleaseFast/ReleaseSafe etc
     exe.setOutputDir(".");
     exe.install();
@@ -83,6 +93,7 @@ const p_1_700_000m =
 // the residual gliders break thru the ash and the last of them exit the ash around 850k
 const p_850_000m =
 \\7bobo$6bo$7bo2bo$9b3o7$3o2$bo$b2o$2b2o$o2b2o6$38b2o$38bo!
+
 ;
 
 const p_95_206_595m =   // nonsymetric quasicrystal coorder ship reaction
