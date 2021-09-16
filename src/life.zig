@@ -1,4 +1,5 @@
 const std = @import("std");
+//const tracy = @import("tracy");
 const display = @import("zbox");
 const build_options = @import("build_options");
                                                                            
@@ -88,13 +89,14 @@ const build_options = @import("build_options");
 // set the pattern to run in ../build.zig
 
 const pattern = build_options.pattern;          // get setting from build.zig
-const Threads:maxIndex = build_options.Threads; // Threads to use from build.zig
+const Threads:MaxIndex = build_options.Threads; // Threads to use from build.zig
 const staticSize = build_options.staticSize;    // static tiles are staticSize x staticSize.  Must be a power of 2.
 const chunkSize = build_options.chunkSize;      // number of cells to use when balancing alive arrays.
 const numChunks = build_options.numChunks;      // initial memory allocations for cells and alive[Threads] arrayLists
 const origin = build_options.origin;            // number is so important, it position cells for middle squares to work well
-const coord = u32;                              // size of x & y coords
-const maxIndex = u32;                           // Maximum index usable in cells (limits population to about std.math.maxInt(maxIndex)/8)
+const Coord = u32;                              // size of x & y coords
+const MaxIndex = u32;                           // Maximum index usable in cells (limits population to about std.math.maxInt(maxIndex)/8)
+const timeOut = std.math.maxInt(u64);           // Time out in ns for Futex wait
 
 // with p_95_206_595mS on an i7-4770k at 3.5GHz (4 cores, 8 hyperthreads)
 //
@@ -127,89 +129,382 @@ fn panic(msg: []const u8, error_return_trace: ?*std.builtin.StackTrace) noreturn
 }
 
 const Point = packed struct {   // cell coords (packed so we can bitCast a Point to a u64)
-    x: coord align(8),
-    y: coord,
-};
-
-const Area = struct {
-    p: Point,               // starting center point
-    x: coord,               // x in 'static' area
-    y: coord,               // y in 'static' area
-    f: bool,                // is area active?
+    x: Coord align(16),
+    y: Coord,
     
     const m = staticSize-1;
     
-    const itr = [_]@TypeOf(xa_0){xa_0, ya_1, xs_2, xs_3, ys_4, ys_5, xa_6, xa_7};
+    const active = [_]@TypeOf(middle){lowerLeftA, lowerA, lowerRightA, leftA, middleA, rightA, topLeftA,  topA, topRightA};
+//  const active = [_]@TypeOf(middle){other,      other,        other, other, middleA,  other,    other, other, other};         // try with small l2 cache
+    const static = [_]@TypeOf(middle){lowerLeft,  lower,   lowerRight,  left,  middle,  right,  topLeft,   top, topRight};
+//  const static = [_]@TypeOf(middle){other,      other,        other, other,  middle,  other,    other, other, other};
+     
+    const Self = @This();
     
-    const Self=@This();
-    
-    fn center(self: *Self) bool {
-        self.x = self.p.x&m;
-        self.y = self.p.y&m;
-        self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
+    fn middle(_: *Self) void {
+    }
+      
+    fn lower(p: *Self) void {      // .{ysc,  xs_,  xa2 }
+        const list =  .{ysc,  .{xs_,  xa2 }};
+        if (list[0](p)) {
+           grid.addCell(p.*,1);
+           inline for (list[1]) |next| {
+                next(p);
+                grid.addCell(p.*,1);
+           }
+        }
     }
     
-    fn xa_0(self: *Self) bool {        
-        self.p.x +%= 1;
-        if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
+    fn left(p: *Self) void {       // .{xsc,  ys_,  ya2 }
+        const list = .{xsc,  .{ys_,  ya2 }};
+        if (list[0](p)) {
+           grid.addCell(p.*,1);
+           inline for (list[1]) |next| {
+                next(p);
+                grid.addCell(p.*,1);
+           }
+        }     
+    }   
+    
+    fn right(p: *Self) void {      // .{xac,  ys_,  ya2 }
+        const list = .{xac,  .{ys_,  ya2 }};
+        if (list[0](p)) {
+           grid.addCell(p.*,1);
+           inline for (list[1]) |next| {
+                next(p);
+                grid.addCell(p.*,1);
+           }
+        }       
+    }
+    
+    fn top(p: *Self) void {        // .{yac,  xs_,  xa2 }
+        const list = .{yac,  .{xs_,  xa2 }};
+        if (list[0](p)) {
+           grid.addCell(p.*,1);
+           inline for (list[1]) |next| {
+                next(p);
+                grid.addCell(p.*,1);
+           }
+        }       
+    }
+    
+    fn lowerLeft(p: *Self) void {
+        inline for (.{ .{ysc, .{xa_}}, .{xs2c, .{}}, .{yac, .{ya_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else 
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+        }
+    }
+    
+    fn lowerRight(p: *Self) void {
+        inline for (.{ .{xac,  .{ya_}}, .{ys2c, .{}}, .{xsc, .{xs_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else 
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+        }
+    }
+    
+    fn topLeft(p: *Self) void {
+        inline for (.{ .{xsc, .{ys_}}, .{ya2c, .{}}, .{xac, .{xa_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else 
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+        }
+    }
+    
+    fn topRight(p: *Self) void {
+        inline for (.{ .{yac, .{xs_}}, .{xa2c, .{}}, .{ysc, .{ys_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else 
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+        }
+    }
+    
+    // const mA  = [_]vec{xa_, ya_, xs_, xs_, ys_, ys_, xa_, xa_ };
+    fn middleA(p: *Self) void {
+        inline for (.{xa_, ya_, xs_, xs_, ys_, ys_, xa_, xa_ }) |next| {
+            next(p);
+            grid.addCell(p.*,1);
+        }            
+    }
+    
+     // const mA  = [_]vec{xa_, ya_, xs_, xs_, ys_, ys_, xa_, xa_ };
+    fn other(p: *Self) void {
+        inline for (.{xa_, ya_, xs_, xs_, ys_, ys_, xa_, xa_ }) |next| {
+            next(p);
+            if (grid.active[grid.index(p.x|m, p.y|m)])
+                grid.addCell(p.*,1);
+        }            
+    }
+    
+    // const bA  = [_]vec{xst, ya_, xa_, xa_, ys_, ysc, xs_, xs_ }; 
+    fn lowerA(p: *Self) void {
+        inline for ( .{ .{xst, .{ya_, xa_, xa_, ys_}}, .{ysc, .{xs_, xs_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } 
+        }
     } 
     
-    fn ya_1(self: *Self) bool { 
-        self.p.y +%= 1;
-        if (self.y==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)]; 
-        return self.f;
-    }    
+    // const lA  = [_]vec{yat, xa_, ys_, ys_, xs_, xsc, ya_, ya_ }; 
+    fn leftA(p: *Self) void {
+        inline for ( .{ .{yat, .{xa_, ys_, ys_, xs_}}, .{xsc, .{ya_, ya_ }} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } 
+        }
+    } 
+    
+    // const rA  = [_]vec{yst, xs_, ya_, ya_, xa_, xac, ys_, ys_ };
+    fn rightA(p: *Self) void {
+        inline for ( .{ .{yst, .{xs_, ya_, ya_, xa_}}, .{xac, .{ys_, ys_ }} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } 
+        }
+    } 
+ 
+    // const tA  = [_]vec{xst, ys_, xa_, xa_, ya_, yac, xs_, xs_ }; 
+    fn topA(p: *Self) void {
+        inline for ( .{ .{xst, .{ys_, xa_, xa_, ya_}}, .{yac, .{xs_, xs_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } 
+        }
+    }
+    
+    // const blA = [_]vec{yat, xa_, ys_, ysc, xs_, xsc, yac, ya_ }; 
+    fn lowerLeftA(p: *Self) void {
+        inline for (.{ .{yat, .{xa_, ys_}}, .{ysc, .{xs_}}, .{xsc, .{}}, .{yac, .{ya_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else {
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+            }
+        }
+    }
+    
+    // const brA = [_]vec{xst, ya_, xa_, xac, ys_, ysc, xsc, xs_ };
+    fn lowerRightA(p: *Self) void {
+        inline for (.{ .{xst, .{ya_, xa_}}, .{xac, .{ys_}}, .{ysc, .{}}, .{xsc, .{xs_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else {
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+            }
+        }
+    }
+ 
+    // const tlA = [_]vec{xat, ys_, xs_, xsc, ya_, yac, xac, xa_ };
+    fn topLeftA(p: *Self) void {
+        inline for (.{ .{xat, .{ys_, xs_}}, .{xsc, .{ya_}}, .{yac, .{}}, .{xac, .{xa_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else {
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+            }
+        }
+    }
+ 
+    // const trA = [_]vec{yst, xs_, ya_, yac, ya_, yac, xsc, xs_ };
+    fn topRightA(p: *Self) void {
+        inline for (.{ .{yst, .{xs_, ya_}}, .{yac, .{xa_}}, .{xac, .{}}, .{ysc, .{ys_}} }) |list| {
+            if (list[0](p)) {
+               grid.addCell(p.*,1);
+               inline for (list[1]) |next| {
+                    next(p);
+                    grid.addCell(p.*,1);
+               }
+            } else {
+                inline for (list[1]) |next| {
+                    next(p);
+                }
+            }
+        }
+    }
+        
+    fn xa_(p: *Self) callconv(.Inline) void {
+        p.x +%= 1;   
+    } 
 
-    fn xs_2(self: *Self) bool { 
-        self.p.x -%= 1;
-        if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
-    }    
-    
-    fn xs_3(self: *Self) bool {
-        self.p.x -%= 1;
-        if (self.x==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
-    }    
-    
-    fn ys_4(self: *Self) bool {
-        self.p.y -%= 1;
-        if (self.y==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
-    }  
-    
-    fn ys_5(self: *Self) bool {
-        self.p.y -%= 1;
-        if (self.y==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
-    }  
-    
-    fn xa_6(self: *Self) bool { 
-        self.p.x +%= 1; 
-        if (self.x==0) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
+    fn xat(p: *Self) callconv(.Inline) bool {
+        p.x +%= 1;
+        return true;
     } 
     
-    fn xa_7(self: *Self) bool {
-        self.p.x +%= 1;
-        if (self.x==Self.m) self.f = grid.active[grid.index(self.p.x|m, self.p.y|m)];
-        return self.f;
+    fn xac(p: *Self) callconv(.Inline) bool { 
+        p.x +%= 1;
+        return grid.active[grid.index(p.x|m, p.y|m)];
+    }  
+
+    fn xa2(p: *Self) callconv(.Inline) void {            
+        p.x +%= 2;   
+    }  
+
+    fn xa2c(p: *Self) callconv(.Inline) bool {            
+        p.x +%= 2;     
+        return grid.active[grid.index(p.x|m, p.y|m)];
+    }  
+
+    fn xs_(p: *Self) callconv(.Inline) void { 
+        p.x -%= 1;
+    }
+
+    fn xst(p: *Self) callconv(.Inline) bool { 
+        p.x -%= 1;
+        return true;
+    }
+    
+    fn xsc(p: *Self) callconv(.Inline) bool { 
+        p.x -%= 1;
+        return grid.active[grid.index(p.x|m, p.y|m)];
+    }  
+
+    fn xs2c(p: *Self) callconv(.Inline) bool { 
+        p.x -%= 2;
+        return grid.active[grid.index(p.x|m, p.y|m)];
+    }  
+
+    fn ya_(p: *Self) callconv(.Inline) void { 
+        p.y +%= 1;
+    }
+
+    fn yat(p: *Self) callconv(.Inline) bool { 
+        p.y +%= 1;
+        return true;
+    }
+
+    fn yac(p: *Self) callconv(.Inline) bool {
+        p.y +%= 1;
+        return grid.active[grid.index(p.x|m, p.y|m)];
     } 
+
+    fn ya2(p: *Self) callconv(.Inline) void { 
+        p.y +%= 2;
+    }
+
+    fn ya2c(p: *Self) callconv(.Inline) bool {
+        p.y +%= 2;
+        return grid.active[grid.index(p.x|m, p.y|m)];
+    } 
+
+    fn ys_(p: *Self) callconv(.Inline) void {
+        p.y -%= 1;
+    }  
+
+    fn yst(p: *Self) callconv(.Inline) bool {
+        p.y -%= 1;
+        return true;
+    } 
+    
+    fn ysc(p: *Self) callconv(.Inline) bool {
+        p.y -%= 1;
+        return grid.active[grid.index(p.x|m, p.y|m)];
+    } 
+
+    fn ys2c(p: *Self) callconv(.Inline) bool {
+        p.y -%= 2;
+        return grid.active[grid.index(p.x|m, p.y|m)];
+    } 
+    
 };
 
+
+//    // const mA  = [_]vec{xa_, ya_, xs_, xs_, ys_, ys_, xa_, xa_ };
+//    // const bA  = [_]vec{xs_, ya_, xa_, xa_, ys_, ysc, xs_, xs_ };                      
+//    // const lA  = [_]vec{ya_, xa_, ys_, ys_, xs_, xsc, ya_, ya_ };              
+//    // const rA  = [_]vec{ys_, xs_, ya_, ya_, xa_, xac, ys_, ys_ };  
+//    // const tA  = [_]vec{xs_, ys_, xa_, xa_, ya_, yac, xs_, xs_ };  
+//    // const blA = [_]vec{ya_, xa_, ys_, ysc, xs_, xsc, yac, ya_ }; 
+//    // const brA = [_]vec{xs_, ya_, xa_, xac, ys_, ysc, xsc, xs_ };
+//    // const tlA = [_]vec{xa_, ys_, xs_, xsc, ya_, yac, xac, xa_ };
+//    // const trA = [_]vec{ys_, xs_, ya_, yac, ya_, yac, xsc, xs_ };
+//                 
+//    //const mI = [_]vec{};                                                 // skip (25% of a 4x4 area)
+//    //const bI  = [_]vec{ysc,  xs_,  xa2 };                                // 1 test, three checks (12.5% or 4x4 area)
+//    //const lI  = [_]vec{xsc,  ys_,  ya2 };                                // 1 test, three checks (12.5% or 4x4 area)
+//    //const rI  = [_]vec{xac,  ys_,  ya2 };                                // 1 test, three checks (12.5% or 4x4 area)
+//    //const tI  = [_]vec{yac,  xs_,  xa2 };                                // 1 test, three checks (12.5% or 4x4 area)
+//    //const blI = [_]vec{ysc,  xa_,  xs2c, yac,  ya_ };                    // 3 tests, 5 checks (6.25% of 4x4 area)  
+//    //const brI = [_]vec{xac,  ya_,  ys2c, xsc,  xs_ };                    // 3 tests, 5 checks (6.25% of 4x4 area)
+//    //const tlI = [_]vec{xsc,  ys_,  ya2c, xac,  xa_ };                    // 3 tests, 5 checks (6.25% of 4x4 area)
+//    //const trI = [_]vec{yac,  xs_,  xa2c, ysc,  ys_ };                    // 3 tests, 5 checks (6.25% of 4x4 area)
+
+
 const Cell = packed struct {    
-    p: Point align(16),         // point for this cell
-    n: maxIndex,                // pointer for the next cell in the same hash chain
+    p: Point,                   // point for this cell
+    n: MaxIndex,                // index for the next cell in the same hash chain (index is faster than using pointers)
     v: u8,                      // cells value
 };
 
 var theSize:usize = 0;
                  
 const Hash = struct {
-    hash: []maxIndex,           // pointers into the cells arraylist (2^order x 2^order hash table)
+    hash: []MaxIndex,           // pointers into the cells arraylist (2^order x 2^order hash table)
     active: []bool,             // flag if 4x4 area is static
+//    mask:u32,
     order:u5,                   // hash size is 2^(order+order), u5 for << and >> with usize and a var
     shift:u5,                   // avoid a subtraction in index 
        
@@ -225,6 +520,7 @@ const Hash = struct {
         
         return Hash{ .hash=undefined, 
                      .active=undefined,
+//                     .mask=(@as(u32,1)<<o)-1,
                      .order = o, 
                      .shift = @intCast(u5,31-o+1),          // 32-o fails with a comiplier error...  
                    };        
@@ -234,15 +530,16 @@ const Hash = struct {
         if (self.order != s.order) {
             self.order = s.order;
             self.shift = s.shift;
+//            self.mask = s.mask;
             allocator.free(self.hash);
-            self.hash = try allocator.alloc(maxIndex,@as(u32,1)<<2*self.order);
+            self.hash = try allocator.alloc(MaxIndex,@as(u32,1)<<2*self.order);
         }
         // clear the hash table pointers
         
         // from valgrind, only @memset is using the os memset call
         // for (self.hash) |*c| c.* = null;                
         // std.mem.set(?*Cell,self.hash,null);
-        @memset(@ptrCast([*]u8,self.hash),0,@sizeOf(maxIndex)*@as(u32,1)<<2*self.order);
+        @memset(@ptrCast([*]u8,self.hash),0,@sizeOf(MaxIndex)*@as(u32,1)<<2*self.order);
         self.active = s.active;
     }
     
@@ -265,9 +562,15 @@ const Hash = struct {
     }
         
     fn setActive(self:*Hash,p:Point) callconv(.Inline) void {   // Collisions are ignored here, more tiles will be flagged as active which is okay
+    
+         //const ttt = tracy.trace(@src());
+         //defer ttt.end();
          
          const i = staticSize;                                  // global is not faster, must be 2^N
-         const m:coord = staticSize-1;                                // 2^N-1 is a binary mask of N ones.
+         const m:Coord = staticSize-1;                          // 2^N-1 is a binary mask of N ones.
+         //const mask = @bitCast(u64,Point{.x=m, .y=m});
+         //const t = @bitCast(Point,@bitCast(u64,p)|mask);
+         //const a = @bitCast(Point,@bitCast(u64,p)&mask);
         
          var t = Point{.x=p.x|m, .y=p.y|m};                     // using a const for t and var tx=t.x, ty=t.y is slower
                                                                 // using masks instead of shifting is also faster         
@@ -296,27 +599,36 @@ const Hash = struct {
     fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   // this faster than bitCast a point to u64 and hashing with that value
         return (( x*%x >> self.shift) ^                         
                 ( y*%y >> self.shift << self.order)); 
-    }  
+    } 
+    
+//  fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   // only use if there is no hw multiply
+//      return (( x & self.mask) ^                         
+//              ( y & self.mask << self.order)); 
+//  }  
     
 // find a Cell in the heap and increment its value, if not known, link it in and set its initial value
  
-    fn addCell(self:*Hash, p:Point, v:u8) callconv(.Inline) void { 
+    //fn addCell(self:*Hash, p:Point, v:u8) callconv(.Inline) void {
+    fn addCell(self:*Hash, p:Point, v:u8) void {
+    
+        //const ttt = tracy.trace(@src());
+        //defer ttt.end();
         
         const h = &self.hash[self.index(p.x, p.y)];     // zig does not have 2D dynamic arrays so we fake it... (using const x=p.x etc is no faster)
         
-        var i:maxIndex = h.*;                           // index of the current Cell, 0 implies EOL
+        var i:MaxIndex = h.*;                           // index of the current Cell, 0 implies EOL
             
         while (true) {                                  // loop until we have added or updated the cell
             
             const head = i;                             // save the current index at the head of the hash chain (h), for linking & retries
         
-            while (i!=0) {                              // using index(s) is faster (and smaller) than using pointers
+            while (i!=0) {                              // using an index is faster (and smaller) than using pointers
                 const c = &cells.items[i];                 
                 if (@bitCast(u64,p) == @bitCast(u64,c.p)) {     // is this our target cell? (@bitCast(u64... is faster)
                     if (Threads == 1)
                         c.v += v                        // add value to existing cell
                     else
-                        _ = @atomicRmw(u8,&c.v,.Add,v,.Monotonic); 
+                        _ = @atomicRmw(u8,&c.v,.Add,v,.Monotonic);
                     return;
                 }
                 i = c.n;
@@ -328,7 +640,7 @@ const Hash = struct {
                 std.debug.assert(iCells < cells.capacity);
                 return;
             } else {
-                i = @cmpxchgStrong(maxIndex, h, head, iCells, .Release, .Monotonic) orelse {    // weak iis not measurabily faster                               
+                i = @cmpxchgStrong(MaxIndex, h, head, iCells, .Release, .Monotonic) orelse {    // weak iis not measurabily faster                               
                     iCells += Threads;                                                          // commit the cell
                     std.debug.assert(iCells < cells.capacity);
                     return;
@@ -365,103 +677,130 @@ var zn:usize = 0;                                            // generation of ne
 var b:u32 = 0;                                               // births and deaths
 var d:u32 = 0;    
     
-var gpa = std.heap.GeneralPurposeAllocator(.{}) {};          
+var gpa = std.heap.GeneralPurposeAllocator(.{}) {};
 const allocator = &gpa.allocator;
 
+//const allocator = std.heap.c_allocator;
+
 var alive = [_]std.ArrayList(Point){undefined} ** Threads;   // alive cells, static cell stay in this list       
-var check = std.ArrayList(*Cell).init(allocator);            // cells that may change during the next iteration
+
 var cells = std.ArrayList(Cell).init(allocator);             // could be part of Hash structure, deallocation is easier this way
 
 var grid:Hash = undefined;                                   // the current hash containing cells and the static tiles mask array
 var newgrid:Hash = undefined;                                // what will be come the next grid hash
                 
 var cellsLen=[_]u32{undefined} ** Threads;                   // array to record iCells values when exiting threads
-var work:std.Thread.Mutex = std.Thread.Mutex{};              // start processing mutex
-var fini:std.Thread.Mutex = std.Thread.Mutex{};              // prevent a thread from finishing before we see its working/displaying
-var begin:std.Thread.Condition = std.Thread.Condition{};     // avoid busy waits when staring work
-var done:std.Thread.Condition = std.Thread.Condition{};      // avoid busy waits when waiting for work to finish
-var working:u32 = 1;                                         // active processing threads
-var checking = processAlive;                                 // controls what processing is done
+
+var work = std.atomic.Atomic(u32).init(1);                   // threads waiting to start working wait here
+var fini = std.atomic.Atomic(u32).init(1);                   // thread done working wait here
+
+var ready = std.atomic.Atomic(u32).init(1);                  // used to notify main thread when all worker threads are ready
+var done = std.atomic.Atomic(u32).init(1);                   // used to notify main thread when all worker threads are done
+
+var working = std.atomic.Atomic(u32).init(0);                // active worker threads
+
+var checking = processAlive;                                 // controls what processing is done by worker threads
+
 var going:bool = true;                                       // false when quitting
 
-var disp:std.Thread.Mutex = std.Thread.Mutex{};              // display mutex
-var push:std.Thread.Condition = std.Thread.Condition{};      // used to signal display thread to start
+var disp = std.atomic.Atomic(u32).init(1);                   // used to notify display thread to start
 var pushing:?*display.Buffer = null;                         // buffer to push or null
 
-threadlocal var iCells:maxIndex = undefined;                 // index to cells thead partition
+threadlocal var iCells:MaxIndex = undefined;                 // index to cells thead partitionthreadlocal var flag:bool = undefined;
 
 var cellsMax:u32 = 0;                                        // largest length of the cellLen subarrays
 var staticMax:u32 = 0;
 
-pub fn pushScreen(_:void) void {                             // Thread for display (lazy) updates
+pub fn pushScreen() void {                                   // Thread for display (lazy) updates
 
-    var dw = disp.acquire();                                 // we own this mutex
+    //const ttt = tracy.trace(@src());
+    //defer ttt.end();  
+    
+    //var dw = disp.acquire();                               // we own this mutex
     while (going) { 
-        pushing = null;                                      // tell main loop we are ready to display (mutex is held when pushing is updated)
-        push.wait(&disp);                                    // wait for signal from main loop
+        pushing = null;                                                     // tell main loop we are ready to display
+        
+        std.Thread.Futex.wait(&disp,1,timeOut) catch unreachable;     // wait for main thread to wake us
+        disp.store(1,.Release);
+        
         if (pushing) |pushIt|                                // main loop sets pushing with the buffer to push to the display
             display.push(pushIt.*) catch unreachable;
     }
-    dw.release();
 } 
 
-pub fn worker(t:maxIndex) void {                            // worker threads for generation updates use this function
-    
+pub fn worker(t:MaxIndex) void {                            // worker threads for generation updates use this function
+ 
     while (going) {                                             
                                                               
-        const w = work.acquire();                           // block waiting for work
-        working += 1;                                       // we need to start Thread-1 workers counting from 1
-        if (working>Threads) begin.signal();                // tell main thread when workers are started
-        w.release();
-         
-        if (going) checking(t);                             // call worker function
+        if (working.fetchAdd(1, .AcqRel) == Threads-1) {    // notify main thread when all workers are ready
+            ready.store(0, .Release);
+            std.Thread.Futex.wake(&ready,1);
+        }
+        std.Thread.Futex.wait(&work,1,timeOut) catch unreachable;  // wait for main thread to wake us
+
+        if (going) checking(t);                              // call worker function
                                                               
-        const f = fini.acquire();                           // worker is now finished
-        working -= 1;                                   
-        if (working==0) done.signal();                      // tell main we are done, will only reach 0 if main thread is waiting
-        f.release(); 
+        if (working.fetchSub(1, .AcqRel) == 1) {             // notify main thead when workers are all doen
+            done.store(0, .Release);
+            std.Thread.Futex.wake(&done,1);
+        }
+        std.Thread.Futex.wait(&fini,1,timeOut) catch unreachable;  // wait for main thread to wake us
     }
 }
 
-pub fn processAlive(t:maxIndex) void {          // process cells in alive[t] adding to cells 
-                                                                                                  
-    const list = &alive[t];                     // extacting x and y and using them does not add more speed here
+pub fn processAlive(t:MaxIndex) void {          // process cells in alive[t] adding to cells 
+
+    //const ttt = tracy.trace(@src());
+    //defer ttt.end();
     
-    iCells = if (t!=0) t else Threads;          // threadlocal vars, we trade memory for thread safey and speed
-                                                // and treat the arrayList as dynamic arrays
+    const yw = [_]u8{0} ++ ([_]u8{3}**(staticSize-2)) ++ [_]u8{6};
+    const xw = [_]u8{0} ++ ([_]u8{1}**(staticSize-2)) ++ [_]u8{2};
+                                                                                                          
+    const list = &alive[t];                     // extacting x and y and using them does not add more speed here
+    const m = staticSize-1;
+    
+    iCells = if (t!=0) t else Threads;          // Zero indicates a EOL.  Threadlocal var, we trade memory for thread safey 
+                                                // and speed treating the arrayList as a group of dynamic arrays.
     var i:u32 = 0;
 
     while (i < list.items.len) {                // add cells to the hash to enable next generation calculation
             
-        var a = Area{ .p=list.items[i], .x=undefined, .y=undefined, .f=undefined };  // add point to surround
+        var p = list.items[i];                  // add point to surrounding area
         
         // if cell is within the display window update the screen buffer        
-        if (a.p.y > yl and a.p.y <= yh and a.p.x >= xl and a.p.x <= xh) {   // p.y > yl to avoid writing on the status line
-            screen.cellRef(a.p.y-yl, a.p.x-xl).char = 'O';
+        if (p.y > yl and p.y <= yh and p.x >= xl and p.x <= xh) {   // p.y > yl to avoid writing on the status line
+            screen.cellRef(p.y-yl, p.x-xl).char = 'O';
         }
-                           
-        if (a.center()) {                                   // finish Area setup, returning active flag
-            list.items[i] = list.items[list.items.len-1];
-            list.items.len -= 1;                            // swap and remove last item (optimized list.swapRemove(i); )
-            grid.addCell(a.p,10);                           // add the effect of the cell
-        } else {
-            i += 1;                                                     // keep static cells in alive list - they are stable 
-            if (a.x > 0 and a.x < Area.m and a.y > 0 and a.y < Area.m)        
-               continue;                                                // no effect if in center of static area
-        }
+      
+        const x = p.x&m;
+        const y = p.y&m;      
+      
+        if (grid.active[grid.index(p.x|m, p.y|m)]) {        // active flag
+                                                            
+            list.items[i] = list.items[list.items.len-1];   // swap and remove last item ( optimized list.swapRemove(i); )
+            list.items.len -= 1;
             
-        // add effect of the cell on its neighbours in an active areas 
-             
-        comptime var j = 0;                                 // comptime is atleast 12% faster
-        inline while (j<8) : (j+=1) {
-            if (Area.itr[j](&a)) grid.addCell(a.p,1);
+            grid.addCell(p,10);                             // add the effects of the cell
+
+            //Point.otherA(&p);
+            Point.active[yw[y]+xw[x]](&p);
+
+        } else {
+        
+            i += 1;                                         // keep static cells in alive list - they are stable, but may have effects 
+            
+            Point.static[yw[y]+xw[x]](&p);
+            
         }
-    } 
+    }     
     cellsLen[t] = iCells;                                   // save the size of the cell partition for this thread
 }
     
-pub fn processCells(t:maxIndex) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
-    
+pub fn processCells(t:MaxIndex) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
+
+    //const ttt = tracy.trace(@src());
+    //defer ttt.end();
+            
     alive[t].ensureCapacity(staticMax+cellsMax/Threads/2) catch unreachable;
 
     const sub:u32 = @as(u32,0b00001000_00000000_00000000) >> @intCast(u5,std.math.absCast(tg));  // 2^20 shifted by abs(tg), larger tg smaller area. 
@@ -472,17 +811,18 @@ pub fn processCells(t:maxIndex) void {     // this only gets called in threaded 
     var _dy:i32 = 0;    
         
     var k:u32 = t;                      // thread to use for this chunk (think of cells as 2D [Threads,m] with m different for each thread)
-    var i:u32 = k;                      // thread index into cells, used to loop through a chunk's cells for a given thread [k,i]
-    var l:u32 = 0;                      // number of chunks finished (m exceeded) for k(th) thread
+    var i:u32 = k;                      // thread index into cells, used to loop through a chunk's cells for a given thread [k,i], [k,i+Threads...]
+    var l:u32 = Threads;                // number of chunks running (m exceeded) for k(th) thread
     var p:u32 = Threads*chunkSize;      // start of next chunk [0, Threads*chunkSize*n] where n is 0,1,2,...
-    var h=[_]bool{true} ** Threads;     // false when thread's partition is finished (count l once...)
+    var h=[_]bool{false} ** Threads;    // true when thread's partition is finished (count once...)
     
-    while (l < Threads) : ({ k = (k+1)%Threads; i = p+k; p += Threads*chunkSize; }) {        
-        //if (t==0) std.debug.print("{} {} {}: ",.{k, cellsLen[k], p});
-        while (h[k] and i < p) : (i += Threads) {
+    while (l > 0) : ({ k = (k+1)%Threads; i = p+k; p += Threads*chunkSize; }) {        
+        if (h[k]) 
+            continue;
+        while (i < p) : (i += Threads) {
             if (i>=cellsLen[k]) {
-                l += 1;
-                h[k] = false;
+                l -= 1;
+                h[k] = true;
                 break;
             }
             const c = cells.items[i];
@@ -545,16 +885,16 @@ pub fn processCells(t:maxIndex) void {     // this only gets called in threaded 
     dy += _dy;
 }
 
-pub fn ReturnOf(comptime func: anytype) type {
-    return switch (@typeInfo(@TypeOf(func))) {
-        .Fn, .BoundFn => |fn_info| fn_info.return_type.?,
-        else => unreachable,
-    };
-}
+// pub fn ReturnOf(comptime func: anytype) type {
+//     return switch (@typeInfo(@TypeOf(func))) {
+//         .Fn, .BoundFn => |fn_info| fn_info.return_type.?,
+//         else => unreachable,
+//     };
+// }
 
 pub fn main() !void {
     
-    var t:maxIndex = 0;                     // used for iterating up to Threads
+    var t:MaxIndex = 0;                     // used for iterating up to Threads
     
     while (t<Threads) : ( t+=1 ) {
         alive[t] = std.ArrayList(Point).init(allocator);
@@ -566,7 +906,7 @@ pub fn main() !void {
     
     defer grid.deinit();                    // this also cleans up newgrid's storage
     
-    const stdout = std.io.getStdOut().writer();
+    //const stdout = std.io.getStdOut().writer();
     
     try display.init(allocator);            // setup zbox display
     defer display.deinit();
@@ -597,9 +937,9 @@ pub fn main() !void {
     
 // rle pattern decoding 
     
-    var X:coord = origin;
-    var Y:coord = origin;
-    var count:coord = 0;
+    var X:Coord = origin;
+    var Y:Coord = origin;
+    var count:Coord = 0;
     t = 0;
     for (pattern) |c| {
         switch (c) {
@@ -646,7 +986,7 @@ pub fn main() !void {
 // initial grid. The cells arrayList is sized so it will not grow during a calcuation so pointers are stable                                                                                                    
 
     grid = try Hash.init(9*pop);                    // this sets the order of the Hash (no allocations are done)
-    grid.hash = try allocator.alloc(maxIndex,1);    // initialize with dummy allocations for .takeStatic and .assign to free
+    grid.hash = try allocator.alloc(MaxIndex,1);    // initialize with dummy allocations for .takeStatic and .assign to free
     grid.active = try allocator.alloc(bool,1);  
     
     newgrid = try Hash.init(9*pop);                 // set the order for the generation
@@ -673,21 +1013,24 @@ pub fn main() !void {
     var sRate_ = sRate;
     var delay:usize = 0;
            
-    var w = work.acquire();                         // block processing/check update theads
+    //var w = work.acquire();                         // block processing/check update theads
     
     t = 0;                                              
-    while (t<Threads) : ( t+=1 ) {                  // start the workers
-        _ = try std.Thread.spawn(worker,t);         
+    while (t<Threads) : ( t+=1 ) {                            // start the workers
+        const h = try std.Thread.spawn(.{},worker,.{t});         
+        h.detach();                                           // or h.join() to wait
     }
-    _ = try std.Thread.spawn(pushScreen,{});        // start display thread
     
-    var f:ReturnOf(fini.acquire) = undefined;       // used to stop worker from registering a completion before we see the start
+    {
+        const h = try std.Thread.spawn(.{},pushScreen,.{});   // start display thread
+        h.detach();
+    }
  
 // main event/life loop  
    
      while (going) {
                   
-        var i:u32 = 0;                                       // var for loops
+        //var i:u32 = 0;                                       // var for loops
         
         try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
@@ -703,11 +1046,14 @@ pub fn main() !void {
             pop += @intCast(u32,alive[t].items.len);
         }
             
-        checking = processAlive;                             // tell worker to use processAlive
+        checking = processAlive;                             // tell workers to use processAlive
                                                             
-        f = fini.acquire();                                  // block completions so a quickly finishing thread is seen
-        begin.wait(&work);                                   // release work mutex and wait for worker to signal all started
-        f.release();                                         // allow completions
+        std.Thread.Futex.wait(&ready,1,timeOut) catch unreachable;   // wait for workers to be ready
+        ready.store(1,.Release);
+        
+        fini.store(1,.Release);                              // start the workers
+        work.store(0,.Release);
+        std.Thread.Futex.wake(&work,Threads+1);
          
         {                                                    
             const e = (try display.nextEvent()).?;           // get and process any user input
@@ -745,20 +1091,24 @@ pub fn main() !void {
             
         }
                                                             
-        f = fini.acquire();                                 
-        if (working > 1) {                                   // wait for all worker threads to finish
-            working -= 1;                                    // only signal if we are waiting
-            done.wait(&fini);
-            working += 1;
-        }
-        f.release();
+        std.Thread.Futex.wait(&done,1,timeOut) catch unreachable;   // wait till all workers are done
+        done.store(1,.Release);
+        
+        work.store(1,.Release);                             // tell workers to enter ready state
+        fini.store(0,.Release);
+        std.Thread.Futex.wake(&fini,Threads+1);
         
         yl = yl_;                                            // restore saved yl (can be used to stop screen updates)
         
         if (!going) {
-           w.release();                                      // quit, we need to doing this when workers are waiting
-           if (pushing==null) push.signal();                 // make sure display thread also ends
-           return;  
+           work.store(0,.Release);
+           std.Thread.Futex.wake(&work,Threads+1);
+           //w.release();                                      // quit, we need to doing this when workers are waiting
+           if (pushing==null) {
+                disp.store(0,.Release);
+                std.Thread.Futex.wake(&disp,1);                 // make sure display thread also ends
+            }
+            return;  
         }
                 
         // gather stats needed for display and sizing cells, check and alive[] arrayLists
@@ -784,9 +1134,16 @@ pub fn main() !void {
                   
         checking = processCells;                            // tell worker to use processCells  
         
-        f = fini.acquire();                                 // wait for all worker threads to start
-        begin.wait(&work);                                  // release work mutex and wait for workers to start and signal
-        f.release();                                        // let threads record completions
+        std.Thread.Futex.wait(&ready,1,timeOut) catch unreachable;      // wait for workers to enter ready state
+        ready.store(1,.Release);
+        
+        fini.store(1,.Release);                               // start the workers
+        work.store(0,.Release);
+        std.Thread.Futex.wake(&work,Threads+1);
+        
+        //f = fini.acquire();                                 // wait for all worker threads to start
+        //begin.wait(&work);                                  // release work mutex and wait for workers to start and signal
+        //f.release();                                        // let threads record completions
         
         {                                                   // use this thread too, at least a little
                      
@@ -822,15 +1179,17 @@ pub fn main() !void {
                     r10k = rk;
                 } 
                 
-                _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {} deaths {} rate{s}{}/s  heap({}) {} window({}) {},{} ±{}  {d:<5.0}", .{gen, std.math.shl(u32,1,s), pop, pop-static, bb, dd, tt, rate, grid.order, cellsMax, sRate, @intCast(i64,xl)-origin, @intCast(i64,yl)-origin, gg, r10k});
+                _ = try screen.cursorAt(0,0).writer().print("generation {}({}) population {}({}) births {d:<6} deaths {d:<6} rate{s}{}/s  heap({}) {} window({}) {},{} ±{}  {d:<5.0}", .{gen, std.math.shl(u32,1,s), pop, pop-static, bb, dd, tt, rate, grid.order, cellsMax, sRate, @intCast(i64,xl)-origin, @intCast(i64,yl)-origin, gg, r10k});
             } 
               
             if (pushing==null and gen%std.math.shl(u32,1,s)==0) {     // can we display and do we want to?
             
-                const dw = disp.acquire();
+                //const dw = disp.acquire();
                 pushing = screen;                   // update with new buffer to push
-                push.signal();                      // signal display pushing thread to start
-                dw.release();
+                disp.store(0,.Release);
+                std.Thread.Futex.wake(&disp,1);
+                //push.signal();                      // signal display pushing thread to start
+                // dw.release();
                 
                 if (screen == &s0)                  // switch to alternate buffer for next display cycle
                     screen = &s1
@@ -885,13 +1244,12 @@ pub fn main() !void {
             
         }
         
-        f = fini.acquire();                                         // wait for all worker threads to finish
-        if (working > 1) {
-            working -= 1;
-            done.wait(&fini);
-            working += 1;
-        }
-        f.release();
+        std.Thread.Futex.wait(&done,1,timeOut) catch unreachable;   // wait for all workers to be done
+        done.store(1,.Release);
+        
+        work.store(1,.Release);                                     // tell workers to get ready
+        fini.store(0,.Release);
+        std.Thread.Futex.wake(&fini,Threads+1);
                 
         if (delay>0)                                                // delay to limit the rate
             std.time.sleep(delay);                       
