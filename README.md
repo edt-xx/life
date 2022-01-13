@@ -10,7 +10,7 @@ zig build -Drelease-fast run
 or
 zig build -Drelease-safe run (about 10% slower)
 
-zbox can be cloned from: https://github.com/jessrud/zbox.git or https://github.com/edt-xx/zbox.zig (my clone for zig 0.81)
+zbox can be cloned from: https://github.com/edt-xx/zbox.zig (my clone for zig 0.90) or https://github.com/jessrud/zbox.git (zig 0.81) 
 
 
 Display and controls
