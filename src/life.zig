@@ -546,8 +546,8 @@ const Hash = struct {
     fn takeStatic(self:*Hash,s:*Hash) !void { 
         if (self.order != s.order) {
             allocator.free(s.active);            
-            s.active = try allocator.alloc(bool,@as(u32,1)<<2*self.order);                  // this is accessed via hashing so making it smaller 
-        }                                                                                   // causes more collision and its slower
+            s.active = try allocator.alloc(bool,@as(u32,1)<<2*self.order); // this is accessed via hashing so making it smaller 
+        }                                                                  // causes more collision and its slower
         self.active = s.active;
         // mark all tiles as static to start
         // from valgrind, only @memset uses the os memset
@@ -560,8 +560,9 @@ const Hash = struct {
         allocator.free(self.hash);
         allocator.free(self.active);
     }
-        
-    fn setActive(self:*Hash,p:Point) callconv(.Inline) void {   // Collisions are ignored here, more tiles will be flagged as active which is okay
+     
+    // Collisions are ignored here, more tiles will be flagged as active which is okay
+    fn setActive(self:*Hash,p:Point) callconv(.Inline) void {   
     
          //const ttt = tracy.trace(@src());
          //defer ttt.end();
@@ -579,7 +580,7 @@ const Hash = struct {
 
          self.active[self.index(t.x, t.y)] = true;
          
-         if (x==m         ) self.active[self.index(t.x+%i, t.y   )] = true;     // this is faster than iterating around the point
+         if (x==m         ) self.active[self.index(t.x+%i, t.y   )] = true;     // faster than iterating around the point
          if (x==m and y==m) self.active[self.index(t.x+%i, t.y+%i)] = true;     // as we do with the Area struct
          if (         y==m) self.active[self.index(t.x   , t.y+%i)] = true;
          if (x==0 and y==m) self.active[self.index(t.x-%i, t.y+%i)] = true;
@@ -596,7 +597,7 @@ const Hash = struct {
  
 // passing x, y instead of a point lets the compiler generate beter code (~25% faster) and speed counts here
 
-    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   // this faster than bitCast a point to u64 and hashing with that value
+    fn index(self:Hash, x:u32, y:u32) callconv(.Inline) u32 {   // faster than bitCast a point to u64 and hashing with that
         return (( x*%x >> self.shift) ^                         
                 ( y*%y >> self.shift << self.order)); 
     } 
@@ -614,13 +615,13 @@ const Hash = struct {
         //const ttt = tracy.trace(@src());
         //defer ttt.end();
         
-        const h = &self.hash[self.index(p.x, p.y)];     // zig does not have 2D dynamic arrays so we fake it... (using const x=p.x etc is no faster)
-        
+        const h = &self.hash[self.index(p.x, p.y)];     // zig does not have 2D dynamic arrays so we fake it... 
+                                                        // (using const x=p.x etc is no faster)
         var i:MaxIndex = h.*;                           // index of the current Cell, 0 implies EOL
             
         while (true) {                                  // loop until we have added or updated the cell
             
-            const head = i;                             // save the current index at the head of the hash chain (h), for linking & retries
+            const head = i;                             // save index at the head of the hash chain (h), for linking & retries
         
             while (i!=0) {                              // using an index is faster (and smaller) than using pointers
                 const c = &cells.items[i];                 
@@ -640,7 +641,7 @@ const Hash = struct {
                 std.debug.assert(iCells < cells.capacity);
                 return;
             } else {
-                i = @cmpxchgStrong(MaxIndex, h, head, iCells, .Release, .Monotonic) orelse {    // weak iis not measurabily faster                               
+                i = @cmpxchgStrong(MaxIndex, h, head, iCells, .Release, .Monotonic) orelse {    // weak not measurabily faster                               
                     iCells += Threads;                                                          // commit the cell
                     std.debug.assert(iCells < cells.capacity);
                     return;
@@ -670,7 +671,7 @@ var ix:i32 = 0;
 var dy:i32 = 0;                                              
 var iy:i32 = 0;                                              
                                                              
-var tg:isize = 1;                                            // number of generations used for autotracking, if negitive autotracking is disabled
+var tg:isize = 1;                                            // generations for autotracking, if negitive it is disabled
 var tg_:isize = 1;                                           // alternate toggle (for w command)
 var zn:usize = 0;                                            // generation of next display window switch
                                                              
@@ -678,7 +679,7 @@ var b:u32 = 0;                                               // births and death
 var d:u32 = 0;    
     
 var gpa = std.heap.GeneralPurposeAllocator(.{}) {};
-const allocator = &gpa.allocator;
+const allocator = gpa.allocator();
 
 //const allocator = std.heap.c_allocator;
 
@@ -686,7 +687,7 @@ var alive = [_]std.ArrayList(Point){undefined} ** Threads;   // alive cells, sta
 
 var cells = std.ArrayList(Cell).init(allocator);             // could be part of Hash structure, deallocation is easier this way
 
-var grid:Hash = undefined;                                   // the current hash containing cells and the static tiles mask array
+var grid:Hash = undefined;                                   // hash containing cells and the static tiles mask array
 var newgrid:Hash = undefined;                                // what will be come the next grid hash
                 
 var cellsLen=[_]u32{undefined} ** Threads;                   // array to record iCells values when exiting threads
@@ -716,9 +717,8 @@ pub fn pushScreen() void {                                   // Thread for displ
     //const ttt = tracy.trace(@src());
     //defer ttt.end();  
     
-    //var dw = disp.acquire();                               // we own this mutex
     while (going) { 
-        pushing = null;                                                     // tell main loop we are ready to display
+        pushing = null;                                               // tell main loop we are ready to display
         
         std.Thread.Futex.wait(&disp,1,timeOut) catch unreachable;     // wait for main thread to wake us
         disp.store(1,.Release);
@@ -796,12 +796,12 @@ pub fn processAlive(t:MaxIndex) void {          // process cells in alive[t] add
     cellsLen[t] = iCells;                                   // save the size of the cell partition for this thread
 }
     
-pub fn processCells(t:MaxIndex) void {     // this only gets called in threaded mode when checkMax exceed the cellsThreading threshold
+pub fn processCells(t:MaxIndex) void {     // gets called in threaded mode when checkMax exceed the cellsThreading threshold
 
     //const ttt = tracy.trace(@src());
     //defer ttt.end();
             
-    alive[t].ensureCapacity(staticMax+cellsMax/Threads/2) catch unreachable;
+    alive[t].ensureTotalCapacity(staticMax+cellsMax/Threads/2) catch unreachable;
 
     const sub:u32 = @as(u32,0b00001000_00000000_00000000) >> @intCast(u5,std.math.absCast(tg));  // 2^20 shifted by abs(tg), larger tg smaller area. 
     
@@ -829,11 +829,12 @@ pub fn processCells(t:MaxIndex) void {     // this only gets called in threaded 
             if (c.v < 10) {                           
                 if (c.v == 3) { 
                     std.debug.assert(alive[t].items.len < alive[t].capacity);
-                    alive[t].appendAssumeCapacity(c.p);                         // birth so add to alive list & flag tile(s) as active
+                    
+                    alive[t].appendAssumeCapacity(c.p);             // birth so add to alive list & flag tile(s) as active
                     newgrid.setActive(c.p);       
                     if (c.p.x > cbx) {
                         const tmp = c.p.x-cbx;
-                        if (tmp < sub and tmp > 0)                              // the tmp > 0 is so stable patterns do not drift with autotracking
+                        if (tmp < sub and tmp > 0)                  // tmp>0 so stable patterns do not drift with autotracking
                             _ix +=  @intCast(i32,@clz(u32,tmp));
                     } else {
                         const tmp = cbx-c.p.x;
@@ -902,7 +903,7 @@ pub fn main() !void {
     }                                       // make sure to cleanup the arrayList(s)
                   
     defer cells.deinit();
-    try cells.ensureCapacity((8+Threads)*chunkSize*numChunks);
+    try cells.ensureTotalCapacity((8+Threads)*chunkSize*numChunks);
     
     defer grid.deinit();                    // this also cleans up newgrid's storage
     
@@ -998,7 +999,7 @@ pub fn main() !void {
     while (t<Threads) : ( t+=1 ) {                  // for all threads   
         for (alive[t].items) |p|                    // set all tiles active for the first generation
             { newgrid.setActive(p); }   
-        try alive[t].ensureCapacity(chunkSize*numChunks);
+        try alive[t].ensureTotalCapacity(chunkSize*numChunks);
     }
     b = @intCast(u32,pop);                          // everything is a birth at the start
     
@@ -1013,8 +1014,6 @@ pub fn main() !void {
     var sRate_ = sRate;
     var delay:usize = 0;
            
-    //var w = work.acquire();                         // block processing/check update theads
-    
     t = 0;                                              
     while (t<Threads) : ( t+=1 ) {                            // start the workers
         const h = try std.Thread.spawn(.{},worker,.{t});         
@@ -1035,7 +1034,7 @@ pub fn main() !void {
         try grid.assign(newgrid);                            // assign newgrid to grid (if order changes reallocate hash storage)
         
         cells.clearRetainingCapacity();                      // will help when resizing an empty arrayList avoids a mem.copy
-        try cells.ensureCapacity((pop-static)*(8+Threads));  
+        try cells.ensureTotalCapacity((pop-static)*(8+Threads));  
         cells.expandToCapacity();                            // arrayList length to max
 
 // populate hash & heap from alive lists
@@ -1049,11 +1048,12 @@ pub fn main() !void {
         checking = processAlive;                             // tell workers to use processAlive
                                                             
         std.Thread.Futex.wait(&ready,1,timeOut) catch unreachable;   // wait for workers to be ready
-        ready.store(1,.Release);
+        ready.store(1,.Release);                                     // enable waits at ready (worker disables them before waking this thread)
         
-        fini.store(1,.Release);                              // start the workers
-        work.store(0,.Release);
-        std.Thread.Futex.wake(&work,Threads+1);
+                                                             // start the workers.
+        fini.store(1,.Release);                              // enable waits on fini, 
+        work.store(0,.Release);                              // disable new waits on work & 
+        std.Thread.Futex.wake(&work,Threads+1);              // wake all workers waiting on work
          
         {                                                    
             const e = (try display.nextEvent()).?;           // get and process any user input
@@ -1092,21 +1092,20 @@ pub fn main() !void {
         }
                                                             
         std.Thread.Futex.wait(&done,1,timeOut) catch unreachable;   // wait till all workers are done
-        done.store(1,.Release);
+        done.store(1,.Release);                                     // enable waits at done (worker disables them before waking this thread)
         
         work.store(1,.Release);                             // tell workers to enter ready state
         fini.store(0,.Release);
         std.Thread.Futex.wake(&fini,Threads+1);
         
-        yl = yl_;                                            // restore saved yl (can be used to stop screen updates)
+        yl = yl_;                                           // restore saved yl (can be used to stop screen updates)
         
         if (!going) {
-           work.store(0,.Release);
-           std.Thread.Futex.wake(&work,Threads+1);
-           //w.release();                                      // quit, we need to doing this when workers are waiting
-           if (pushing==null) {
+            work.store(0,.Release);                         // unblock work and wake anything waiting so they can finish cleanly
+            std.Thread.Futex.wake(&work,Threads+1);
+            if (pushing==null) {
                 disp.store(0,.Release);
-                std.Thread.Futex.wake(&disp,1);                 // make sure display thread also ends
+                std.Thread.Futex.wake(&disp,1);             // make sure display thread also ends
             }
             return;  
         }
@@ -1137,14 +1136,10 @@ pub fn main() !void {
         std.Thread.Futex.wait(&ready,1,timeOut) catch unreachable;      // wait for workers to enter ready state
         ready.store(1,.Release);
         
-        fini.store(1,.Release);                               // start the workers
+        fini.store(1,.Release);                             // start the workers
         work.store(0,.Release);
         std.Thread.Futex.wake(&work,Threads+1);
-        
-        //f = fini.acquire();                                 // wait for all worker threads to start
-        //begin.wait(&work);                                  // release work mutex and wait for workers to start and signal
-        //f.release();                                        // let threads record completions
-        
+                
         {                                                   // use this thread too, at least a little
                      
             if (std.time.milliTimestamp() >= rtime) {       // adjust delay to limit rate as user requests.  Results are approximate
@@ -1184,13 +1179,10 @@ pub fn main() !void {
               
             if (pushing==null and gen%std.math.shl(u32,1,s)==0) {     // can we display and do we want to?
             
-                //const dw = disp.acquire();
                 pushing = screen;                   // update with new buffer to push
                 disp.store(0,.Release);
                 std.Thread.Futex.wake(&disp,1);
-                //push.signal();                      // signal display pushing thread to start
-                // dw.release();
-                
+                 
                 if (screen == &s0)                  // switch to alternate buffer for next display cycle
                     screen = &s1
                 else 
@@ -1245,7 +1237,7 @@ pub fn main() !void {
         }
         
         std.Thread.Futex.wait(&done,1,timeOut) catch unreachable;   // wait for all workers to be done
-        done.store(1,.Release);
+        done.store(1,.Release);                                     // reenable waits at done
         
         work.store(1,.Release);                                     // tell workers to get ready
         fini.store(0,.Release);

@@ -26,9 +26,9 @@ pub fn build(b: *std.build.Builder) void {
 //  p_52513m            // longest running mesuthelah currently known (march 2021)
     
     
-    exe_opt.addOption(u32,"Threads",3);                // Threads excluding display update thread - we also use a thread for display updates.  
+    //exe_opt.addOption(u32,"Threads",3);                // Threads excluding display update thread - we also use a thread for display updates.  
     
-    //exe_opt.addOption(u32,"Threads",@intCast(u32,std.math.max(2, std.Thread.getCpuCount() catch 2))-1);    // highest performance                                                 
+    exe_opt.addOption(u32,"Threads",@intCast(u32,std.math.max(2, std.Thread.getCpuCount() catch 2))-1);    // highest performance                                                 
                                                     
     exe_opt.addOption(u32,"staticSize",4);             // Size of static tiles, must be a power of 2 (4 is optimal for most patterns)
                                                         // If a pattern consists of almost all still lives, increase this value (try 8)
@@ -73,6 +73,13 @@ pub fn build(b: *std.build.Builder) void {
 }
 
 // add rle encoded patterns 
+
+// https://www.conwaylife.com/forums/viewtopic.php?t=&p=99036#p99036
+const p_10_514_926m_p2000 =
+\\2o3bob4o2b2o$o3b2o5bo$o3bo2bo4b2obo$bo4bob2o2bobo$3b2ob2o3b4o$o3bo3bob
+\\2ob2o$2b2ob2obob4obo$b10ob2o$2bo3b2o4bob2o$2o3b2o2b3ob2o$4obobo6b2o$ob
+\\3o5bo2b2o$2bobobobo2b2ob2o$2bob2ob2o6bo$2b3obob5o2bo$bo3b2obo2bo3bo!
+;
 
 const p_chaotic1 =
 \\9bobo$8bo$9bo2bo$11b3o8$2bo$2ob2o$2ob2o$2o$2b2obo$3bo2bo$3bo2bo$4b2o!
